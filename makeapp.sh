@@ -11,7 +11,14 @@ APP="build/Cutaway.app"
 SUPPORT="$HOME/Library/Application Support/Cutaway"
 BUILT=".build/$CONFIG"
 
-swift build --disable-sandbox -c "$CONFIG" >/dev/null
+if ! swift build --disable-sandbox -c "$CONFIG" 2>&1 | grep -v '^warning: /Users' ; then
+    echo "!!! BUILD FAILED - app not updated !!!" >&2
+    exit 1
+fi
+if ! swift build --disable-sandbox -c "$CONFIG" >/dev/null 2>&1; then
+    echo "!!! BUILD FAILED - app not updated !!!" >&2
+    exit 1
+fi
 
 # The part that changes every build. Never signed, never inside the bundle.
 mkdir -p "$SUPPORT"

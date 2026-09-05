@@ -4,42 +4,60 @@ import MetalKit
 import CoreGraphics
 import CoreVideo
 
-/// One Metal pass turns a source frame into a finished output frame. Preview
-/// and export both go through here, which is the only way to guarantee what you
-/// see is what you get.
+/// Multi-pass compositor: one pass fills the background, then one blended pass
+/// per layer. Passes rather than a shader loop so the layer count is not baked
+/// into the shader, and so adding captions or a keycast later costs nothing.
 public final class RenderEngine {
 
     private let device: MTLDevice
     private let queue: MTLCommandQueue
-    private let pipeline: MTLRenderPipelineState
+    private let backgroundPipeline: MTLRenderPipelineState
+    private let layerPipeline: MTLRenderPipelineState
     private var textureCache: CVMetalTextureCache!
 
+    public struct Draw {
+        public let texture: MTLTexture
+        public let params: LayerParams
+        public init(texture: MTLTexture, params: LayerParams) {
+            self.texture = texture
+            self.params = params
+        }
+    }
+
     public init() throws {
-        guard let device = MTLCreateSystemDefaultDevice() else {
+        guard let device = MTLCreateSystemDefaultDevice(),
+              let queue = device.makeCommandQueue() else {
             throw NSError(domain: "cutaway", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "no Metal device"])
         }
         self.device = device
-        guard let queue = device.makeCommandQueue() else {
-            throw NSError(domain: "cutaway", code: 3,
-                          userInfo: [NSLocalizedDescriptionKey: "no command queue"])
-        }
         self.queue = queue
 
-        // Compiled at runtime rather than shipped as a metallib: SwiftPM has no
-        // Metal build step, and the cost is a few ms once at startup.
-        let library = try device.makeLibrary(source: RenderEngine.shaderSource,
-                                             options: nil)
-        let desc = MTLRenderPipelineDescriptor()
-        desc.vertexFunction = library.makeFunction(name: "cutaway_vertex")
-        desc.fragmentFunction = library.makeFunction(name: "cutaway_fragment")
-        desc.colorAttachments[0].pixelFormat = .bgra8Unorm
-        pipeline = try device.makeRenderPipelineState(descriptor: desc)
+        let library = try device.makeLibrary(source: RenderEngine.shaderSource, options: nil)
+
+        let bg = MTLRenderPipelineDescriptor()
+        bg.vertexFunction = library.makeFunction(name: "cutaway_vertex")
+        bg.fragmentFunction = library.makeFunction(name: "cutaway_background")
+        bg.colorAttachments[0].pixelFormat = .bgra8Unorm
+        backgroundPipeline = try device.makeRenderPipelineState(descriptor: bg)
+
+        let ly = MTLRenderPipelineDescriptor()
+        ly.vertexFunction = library.makeFunction(name: "cutaway_vertex")
+        ly.fragmentFunction = library.makeFunction(name: "cutaway_layer")
+        let att = ly.colorAttachments[0]!
+        att.pixelFormat = .bgra8Unorm
+        att.isBlendingEnabled = true
+        att.rgbBlendOperation = .add
+        att.alphaBlendOperation = .add
+        att.sourceRGBBlendFactor = .sourceAlpha
+        att.sourceAlphaBlendFactor = .sourceAlpha
+        att.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        layerPipeline = try device.makeRenderPipelineState(descriptor: ly)
+
         CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
     }
 
-    /// Wraps a CVPixelBuffer as a Metal texture with no copy. This is the path
-    /// AVFoundation uses; the CGImage one below is only for stills.
     public func texture(from pb: CVPixelBuffer) -> MTLTexture? {
         var out: CVMetalTexture?
         let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
@@ -50,38 +68,6 @@ public final class RenderEngine {
         return CVMetalTextureGetTexture(out)
     }
 
-    /// Renders straight into a destination pixel buffer, which is what the
-    /// compositor needs. Same shader as the still path, so preview, export and
-    /// thumbnails can never drift apart.
-    public func render(source: CVPixelBuffer, into dst: CVPixelBuffer,
-                       params: RenderParams) -> Bool {
-        guard let srcTex = texture(from: source),
-              let dstTex = texture(from: dst) else { return false }
-        return draw(source: srcTex, target: dstTex, params: params)
-    }
-
-    @discardableResult
-    private func draw(source: MTLTexture, target: MTLTexture,
-                      params: RenderParams) -> Bool {
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-
-        guard let cb = queue.makeCommandBuffer(),
-              let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return false }
-        var p = params
-        enc.setRenderPipelineState(pipeline)
-        enc.setFragmentTexture(source, index: 0)
-        enc.setFragmentBytes(&p, length: MemoryLayout<RenderParams>.stride, index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        enc.endEncoding()
-        cb.commit()
-        cb.waitUntilCompleted()
-        return true
-    }
-
     public func makeTexture(from image: CGImage) throws -> MTLTexture {
         try MTKTextureLoader(device: device).newTexture(cgImage: image, options: [
             .SRGB: false,
@@ -89,16 +75,18 @@ public final class RenderEngine {
         ])
     }
 
-    public func render(source: MTLTexture, params: RenderParams) throws -> CGImage {
-        let w = Int(params.outputSize.x), h = Int(params.outputSize.y)
-
+    public func makeTarget(width: Int, height: Int) -> MTLTexture? {
         let td = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+            pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
         td.usage = [.renderTarget, .shaderRead]
         td.storageMode = .shared
-        guard let target = device.makeTexture(descriptor: td) else {
-            throw NSError(domain: "cutaway", code: 4)
-        }
+        return device.makeTexture(descriptor: td)
+    }
+
+    @discardableResult
+    public func draw(background: BackgroundParams, layers: [Draw],
+                     into target: MTLTexture) -> Bool {
+        guard let cb = queue.makeCommandBuffer() else { return false }
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
@@ -106,19 +94,39 @@ public final class RenderEngine {
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
-        guard let cb = queue.makeCommandBuffer(),
-              let enc = cb.makeRenderCommandEncoder(descriptor: pass) else {
-            throw NSError(domain: "cutaway", code: 5)
-        }
-        var p = params
-        enc.setRenderPipelineState(pipeline)
-        enc.setFragmentTexture(source, index: 0)
-        enc.setFragmentBytes(&p, length: MemoryLayout<RenderParams>.stride, index: 0)
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        var bg = background
+        enc.setRenderPipelineState(backgroundPipeline)
+        enc.setFragmentBytes(&bg, length: MemoryLayout<BackgroundParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+
+        // Same encoder, so layers composite over the background without a
+        // round trip to memory between passes.
+        enc.setRenderPipelineState(layerPipeline)
+        for layer in layers where layer.params.opacity > 0.001 {
+            var p = layer.params
+            enc.setFragmentTexture(layer.texture, index: 0)
+            enc.setFragmentBytes(&p, length: MemoryLayout<LayerParams>.stride, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
         enc.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()
+        return true
+    }
 
+    public func render(background: BackgroundParams, layers: [Draw],
+                       into dst: CVPixelBuffer) -> Bool {
+        guard let target = texture(from: dst) else { return false }
+        return draw(background: background, layers: layers, into: target)
+    }
+
+    public func renderImage(background: BackgroundParams, layers: [Draw],
+                            size: CGSize) throws -> CGImage {
+        guard let target = makeTarget(width: Int(size.width), height: Int(size.height)),
+              draw(background: background, layers: layers, into: target) else {
+            throw NSError(domain: "cutaway", code: 4)
+        }
         return try Self.cgImage(from: target)
     }
 
@@ -146,11 +154,17 @@ public final class RenderEngine {
     #include <metal_stdlib>
     using namespace metal;
 
-    struct Params {
-        float4 crop;
-        float4 plate;
+    struct BackgroundParams {
         float4 bg0;
         float4 bg1;
+        float2 outputSize;
+        float angle;
+        float pad0;
+    };
+
+    struct LayerParams {
+        float4 src;
+        float4 dst;
         float4 borderColor;
         float2 outputSize;
         float2 sourceSize;
@@ -159,14 +173,14 @@ public final class RenderEngine {
         float cornerRadius;
         float shadowRadius;
         float shadowOpacity;
-        float bgAngle;
+        float opacity;
         float borderWidth;
-        float pad1; float pad2; float pad3;
+        float circle;
+        float pad1; float pad2;
     };
 
     struct VOut { float4 pos [[position]]; float2 uv; };
 
-    // Full-screen triangle, no vertex buffer needed.
     vertex VOut cutaway_vertex(uint vid [[vertex_id]]) {
         float2 p[3] = { float2(-1, -1), float2(3, -1), float2(-1, 3) };
         VOut o;
@@ -176,42 +190,53 @@ public final class RenderEngine {
     }
 
     static float sdRoundBox(float2 p, float2 b, float r) {
+        r = min(r, min(b.x, b.y));
         float2 q = abs(p) - b + r;
         return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
     }
 
-    fragment float4 cutaway_fragment(VOut in [[stage_in]],
-                                     texture2d<float> src [[texture(0)]],
-                                     constant Params& P [[buffer(0)]]) {
+    fragment float4 cutaway_background(VOut in [[stage_in]],
+                                       constant BackgroundParams& P [[buffer(0)]]) {
+        float a = P.angle * 3.14159265 / 180.0;
+        float2 dir = float2(cos(a), sin(a));
+        float t = clamp(dot(in.uv - 0.5, dir) + 0.5, 0.0, 1.0);
+        return float4(mix(P.bg0.rgb, P.bg1.rgb, t), 1.0);
+    }
+
+    fragment float4 cutaway_layer(VOut in [[stage_in]],
+                                  texture2d<float> src [[texture(0)]],
+                                  constant LayerParams& P [[buffer(0)]]) {
         constexpr sampler smp(filter::linear, address::clamp_to_edge);
         float2 p = in.uv * P.outputSize;
 
-        float a = P.bgAngle * 3.14159265 / 180.0;
-        float2 dir = float2(cos(a), sin(a));
-        float t = clamp(dot(in.uv - 0.5, dir) + 0.5, 0.0, 1.0);
-        float3 col = mix(P.bg0.rgb, P.bg1.rgb, t);
+        float2 centre = P.dst.xy + P.dst.zw * 0.5;
+        float2 halfSize = P.dst.zw * 0.5;
+        // circle is a 0...1 blend, not a flag, so a rectangle rounding into a
+        // circle mid-transition is continuous rather than a pop.
+        float radius = mix(P.cornerRadius, min(halfSize.x, halfSize.y), saturate(P.circle));
 
-        float2 centre = P.plate.xy + P.plate.zw * 0.5;
-        float2 halfSize = P.plate.zw * 0.5;
+        float sdSh = sdRoundBox(p - centre - P.shadowOffset, halfSize, radius);
+        float aShadow = (1.0 - smoothstep(-P.shadowRadius, P.shadowRadius, sdSh))
+                        * P.shadowOpacity * P.opacity;
 
-        float sdShadow = sdRoundBox(p - centre - P.shadowOffset, halfSize, P.cornerRadius);
-        float shadow = 1.0 - smoothstep(-P.shadowRadius, P.shadowRadius, sdShadow);
-        col = mix(col, float3(0.0), shadow * P.shadowOpacity);
+        float sd = sdRoundBox(p - centre, halfSize, radius);
+        float aPlate = (1.0 - smoothstep(-1.0, 1.0, sd)) * P.opacity;
 
-        float sd = sdRoundBox(p - centre, halfSize, P.cornerRadius);
-        float inside = 1.0 - smoothstep(-1.0, 1.0, sd);
-        if (inside > 0.0) {
-            float2 local = (p - P.plate.xy) / P.plate.zw;
-            float2 srcPx = P.crop.xy + local * P.crop.zw;
-            float3 sc = src.sample(smp, srcPx / P.sourceSize).rgb;
-            col = mix(col, sc, inside);
-        }
+        float aOut = aPlate + aShadow * (1.0 - aPlate);
+        if (aOut < 0.002) { discard_fragment(); }
+
+        float2 local = (p - P.dst.xy) / P.dst.zw;
+        float2 srcPx = P.src.xy + local * P.src.zw;
+        float3 c = src.sample(smp, srcPx / P.sourceSize).rgb;
 
         if (P.borderWidth > 0.0) {
             float band = smoothstep(-P.borderWidth, 0.0, sd) * (1.0 - smoothstep(0.0, 1.5, sd));
-            col = mix(col, P.borderColor.rgb, band * P.borderColor.a);
+            c = mix(c, P.borderColor.rgb, band * P.borderColor.a);
         }
-        return float4(col, 1.0);
+
+        // plate over shadow, then the blend state puts that over the background
+        float3 cOut = (c * aPlate) / max(aOut, 0.0001);
+        return float4(cOut, aOut);
     }
     """
 }

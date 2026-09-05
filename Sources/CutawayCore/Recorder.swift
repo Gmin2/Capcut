@@ -25,6 +25,9 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Only for the alignment check: burns the real cursor into the frames so
     /// logged positions can be compared against where it actually is.
     public var showCursorForVerification = false
+    /// Off by default so a plain screen recording does not trip a camera prompt.
+    public var captureWebcam = false
+    private var webcam: WebcamRecorder?
 
     public override init() { super.init() }
 
@@ -79,6 +82,22 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         self.stream = stream
 
+        // Started before the screen stream so the camera is warm; the two are
+        // aligned afterwards by comparing first-frame timestamps, not by
+        // trying to start them simultaneously.
+        if captureWebcam {
+            if await WebcamRecorder.requestAccess() {
+                let wc = WebcamRecorder()
+                do {
+                    try wc.start(to: url.deletingLastPathComponent()
+                        .appendingPathComponent("webcam.mov"))
+                    webcam = wc
+                } catch { Log.line("webcam unavailable: \(error.localizedDescription)") }
+            } else {
+                Log.line("webcam: camera permission denied")
+            }
+        }
+
         Log.line("recording \(w)x\(h) @60 for \(seconds)s -> \(url.lastPathComponent)")
         try await stream.startCapture()
 
@@ -89,6 +108,16 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         await writer.finishWriting()
 
         let dur0 = CMTimeGetSeconds(lastPTS - firstPTS)
+        let webcamTrack = await webcam?.stop()
+
+        let manifest = Manifest(
+            screen: Manifest.Track(file: url.lastPathComponent,
+                                   pixelSize: [Double(w), Double(h)],
+                                   offset: 0, duration: dur0, frames: frames),
+            webcam: webcamTrack)
+        try manifest.write(to: url.deletingLastPathComponent()
+            .appendingPathComponent("recording.json"))
+
         try events?.stop(duration: dur0,
                          to: url.deletingLastPathComponent().appendingPathComponent("events.json"))
 
@@ -135,6 +164,7 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
             // Anchored to the first frame's PTS, so event times are in the same
             // timeline as the video regardless of capture warmup.
+            webcam?.setAnchor(pts)
             if let space {
                 let er = EventRecorder(space: space)
                 er.start(anchor: pts)

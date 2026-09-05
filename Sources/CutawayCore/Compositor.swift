@@ -2,42 +2,37 @@ import Foundation
 import AVFoundation
 import CoreVideo
 
-/// Immutable snapshot the compositor reads. Published atomically on edit rather
-/// than mutated, because AVFoundation calls the compositor concurrently on its
-/// own queues.
+/// Immutable snapshot the renderer reads. Published atomically on edit rather
+/// than mutated, because AVFoundation calls the compositor concurrently.
 public final class RenderState: @unchecked Sendable {
-    public let style: Style
-    public let sourceSize: CGSize
+    public let screenSize: CGSize
+    public let webcamSize: CGSize?
     public let outputSize: CGSize
-    public let timeline: Timeline?
+    public let timeline: Timeline
 
-    public init(style: Style, sourceSize: CGSize, outputSize: CGSize,
-                timeline: Timeline? = nil) {
-        self.style = style
-        self.sourceSize = sourceSize
+    public init(screenSize: CGSize, webcamSize: CGSize?, outputSize: CGSize,
+                timeline: Timeline) {
+        self.screenSize = screenSize
+        self.webcamSize = webcamSize
         self.outputSize = outputSize
         self.timeline = timeline
     }
 
-    /// Pure: model plus time in, flat numbers out. All animation logic will live
-    /// here, which keeps it unit testable and keeps the shader dumb.
-    public func evaluate(atSourceTime t: Double) -> RenderParams {
-        let crop = timeline?.crop(at: t) ?? CGRect(origin: .zero, size: sourceSize)
-        return style.params(outputSize: outputSize, sourceSize: sourceSize, crop: crop)
+    /// Pure: model plus time in, flat GPU numbers out. All animation logic is
+    /// here, which keeps it unit testable and the shader dumb.
+    public func evaluate(atSourceTime t: Double) -> FrameDescription {
+        timeline.frame(at: t, screenSize: screenSize,
+                       webcamSize: webcamSize, outputSize: outputSize)
     }
 }
 
-/// One instruction spans the whole asset and the compositor computes everything
-/// from `compositionTime`. The alternative, an instruction per keyframe, would
-/// mean thousands of objects for continuously animated properties.
+/// Used for the scrubbable preview. Export drives its own clock instead, since
+/// AVAssetReaderVideoCompositionOutput emits one frame per source frame and
+/// ignores frameDuration, which breaks animation on a static screen.
 public final class CutawayCompositor: NSObject, AVVideoCompositing {
 
     nonisolated(unsafe) public static var state: RenderState?
     nonisolated(unsafe) private static var engine: RenderEngine?
-    /// Counts how many frames AVFoundation actually asked for, which is the
-    /// only way to tell whether the composition is driving output timing or
-    /// just following the source track.
-    nonisolated(unsafe) public static var requestCount = 0
     private static let lock = NSLock()
 
     public var sourcePixelBufferAttributes: [String: any Sendable]? = [
@@ -62,21 +57,18 @@ public final class CutawayCompositor: NSObject, AVVideoCompositing {
 
         Self.lock.lock()
         if Self.engine == nil { Self.engine = try? RenderEngine() }
-        let engine = Self.engine
-        Self.lock.unlock()
-
-        guard let engine else {
+        guard let engine = Self.engine else {
+            Self.lock.unlock()
             request.finish(with: NSError(domain: "cutaway", code: 11))
             return
         }
 
-        Self.lock.lock(); Self.requestCount += 1; Self.lock.unlock()
-
-        let params = state.evaluate(
-            atSourceTime: CMTimeGetSeconds(request.compositionTime))
-
-        Self.lock.lock()
-        let ok = engine.render(source: source, into: dst, params: params)
+        let f = state.evaluate(atSourceTime: CMTimeGetSeconds(request.compositionTime))
+        var layers: [RenderEngine.Draw] = []
+        if let sp = f.screen, let tex = engine.texture(from: source) {
+            layers.append(.init(texture: tex, params: sp))
+        }
+        let ok = engine.render(background: f.background, layers: layers, into: dst)
         Self.lock.unlock()
 
         if ok { request.finish(withComposedVideoFrame: dst) }

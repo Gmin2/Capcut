@@ -97,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             do {
                 try await Export.run(
-                    mov: URL(fileURLWithPath: base + "/recordings/display.mov"),
+                    recordingDir: URL(fileURLWithPath: base + "/recordings"),
                     to: URL(fileURLWithPath: base + "/export.mp4"))
             } catch { Log.line("ERROR: \(error)") }
         }
@@ -109,10 +109,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .expandingTildeInPath
         Task {
             do {
-                try await Still.render(
-                    mov: URL(fileURLWithPath: base + "/recordings/display.mov"),
-                    at: 2.5,
-                    to: URL(fileURLWithPath: base + "/still.png"))
+                let dir = URL(fileURLWithPath: base + "/recordings")
+                // Sweep a few moments so a layout can be judged at a glance.
+                for (i, t) in [1.25, 1.85, 2.30, 3.40].enumerated() {
+                    try await Still.render(
+                        recordingDir: dir, at: t,
+                        timeline: Export.defaultTimeline(
+                            recordingDir: dir,
+                            screenSize: CGSize(width: 3024, height: 1964),
+                            duration: 4.93, hasWebcam: true),
+                        to: URL(fileURLWithPath: base + "/still\(i + 1).png"))
+                }
             } catch { Log.line("ERROR: \(error)") }
         }
     }
@@ -124,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .expandingTildeInPath)
         Task {
             let r = Recorder()
+            r.captureWebcam = true
             r.showCursorForVerification =
                 FileManager.default.fileExists(atPath: NSString(
                     string: "~/Library/Application Support/Cutaway/verify")

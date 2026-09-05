@@ -1,5 +1,6 @@
 import Foundation
 import ScreenCaptureKit
+import AVFoundation
 import AppKit
 
 public enum Probe {
@@ -35,6 +36,26 @@ public enum Probe {
         for s in NSScreen.screens {
             Log.line("  frame=\(s.frame) scale=\(s.backingScaleFactor) name=\(s.localizedName)")
         }
+
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
+            mediaType: .video, position: .unspecified)
+        Log.line("\ncameras: \(discovery.devices.count)  authStatus=\(AVCaptureDevice.authorizationStatus(for: .video).rawValue)")
+        for d in discovery.devices {
+            Log.line("  \(d.localizedName)  id=\(d.uniqueID)  type=\(d.deviceType.rawValue)")
+            let formats = d.formats.suffix(4)
+            for f in formats {
+                let dims = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
+                let fps = f.videoSupportedFrameRateRanges.map {
+                    String(format: "%.0f-%.0f", $0.minFrameRate, $0.maxFrameRate) }.joined(separator: ",")
+                Log.line("     \(dims.width)x\(dims.height) @\(fps)")
+            }
+        }
+
+        let mics = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone], mediaType: .audio, position: .unspecified)
+        Log.line("\nmicrophones: \(mics.devices.count)  authStatus=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
+        for d in mics.devices { Log.line("  \(d.localizedName)") }
 
         Log.line("\napplications: \(content.applications.count)")
         Log.line("windows: \(content.windows.count)")

@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import simd
 
 /// A zoom keyframe. Times are in *source* time, never output time, so cutting a
 /// segment later does not require rewriting every keyframe.
@@ -73,9 +74,18 @@ public struct CubicBezier {
 
 /// Everything time-varying about a project, resolved into a form that makes
 /// `crop(at:)` a pure lookup.
+/// Everything needed to draw one output frame.
+public struct FrameDescription {
+    public var background: BackgroundParams
+    public var screen: LayerParams?
+    public var webcam: LayerParams?
+}
+
 public final class Timeline: @unchecked Sendable {
     public let zooms: [Zoom]
     public let sourceSize: CGSize
+    public var scenes: [Scene] = [Scene(at: 0, layout: "screenOnly")]
+    public var style: Style = .default
 
     /// Cursor smoothing is stateful, so it is integrated once here rather than
     /// recomputed per frame. Keeps evaluation pure and makes scrubbing exact:
@@ -133,6 +143,63 @@ public final class Timeline: @unchecked Sendable {
             return exp(log(1.0) * (1 - p) + log(z) * p)
         }
         return z
+    }
+
+    /// Layout at a time, interpolating across a scene transition. Returns
+    /// resolved layer parameters, not layout names, so the caller never has to
+    /// know how scenes work.
+    private func layout(at t: Double, screenSize: CGSize, webcamSize: CGSize?,
+                        outputSize: CGSize) -> (screen: LayerParams?, webcam: LayerParams?) {
+        let ordered = scenes.sorted { $0.at < $1.at }
+        var currentIndex = 0
+        for (i, s) in ordered.enumerated() where s.at <= t { currentIndex = i }
+        let current = ordered[currentIndex]
+
+        func resolve(_ name: String) -> (LayerParams?, LayerParams?) {
+            let l = Layout.named[name] ?? .screenOnly
+            let s = l.screen?.layerParams(sourceSize: screenSize, outputSize: outputSize)
+            let w = webcamSize.flatMap { size in
+                l.webcam?.layerParams(sourceSize: size, outputSize: outputSize)
+            }
+            return (s, w)
+        }
+
+        var (screen, webcam) = resolve(current.layout)
+
+        // Blend in from the previous layout while the transition is running.
+        let elapsed = t - current.at
+        if currentIndex > 0, current.transition > 0, elapsed < current.transition {
+            let (ps, pw) = resolve(ordered[currentIndex - 1].layout)
+            let f = Float(CubicBezier.zoomIn.solve(elapsed / current.transition))
+            screen = blend(ps, screen, f)
+            webcam = blend(pw, webcam, f)
+        }
+        return (screen, webcam)
+    }
+
+    /// A layer appearing or disappearing scales from its own centre rather than
+    /// popping, which is why the missing side is synthesised instead of nil.
+    private func blend(_ a: LayerParams?, _ b: LayerParams?, _ f: Float) -> LayerParams? {
+        switch (a, b) {
+        case let (a?, b?): return mix(a, b, f)
+        case let (a?, nil): return mix(a, Placement.hidden(like: a), f)
+        case let (nil, b?): return mix(Placement.hidden(like: b), b, f)
+        default: return nil
+        }
+    }
+
+    public func frame(at t: Double, screenSize: CGSize, webcamSize: CGSize?,
+                      outputSize: CGSize) -> FrameDescription {
+        var (screen, webcam) = layout(at: t, screenSize: screenSize,
+                                      webcamSize: webcamSize, outputSize: outputSize)
+        if var s = screen {
+            let c = crop(at: t)
+            s.src = SIMD4(Float(c.origin.x), Float(c.origin.y),
+                          Float(c.width), Float(c.height))
+            screen = s
+        }
+        return FrameDescription(background: style.backgroundParams(outputSize: outputSize),
+                                screen: screen, webcam: webcam)
     }
 
     public func crop(at t: Double) -> CGRect {
