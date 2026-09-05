@@ -103,11 +103,15 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
         try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
 
+        // Wall clock, not the last complete frame. ScreenCaptureKit stops
+        // sending frames when nothing changes, so a take that ends on a still
+        // screen would otherwise be silently truncated.
+        let endPTS = CMClockGetTime(CMClockGetHostTimeClock())
         try await stream.stopCapture()
         input.markAsFinished()
         await writer.finishWriting()
 
-        let dur0 = CMTimeGetSeconds(lastPTS - firstPTS)
+        let dur0 = CMTimeGetSeconds(endPTS - firstPTS)
         let webcamTrack = await webcam?.stop()
 
         let manifest = Manifest(
@@ -121,7 +125,7 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         try events?.stop(duration: dur0,
                          to: url.deletingLastPathComponent().appendingPathComponent("events.json"))
 
-        let dur = CMTimeGetSeconds(lastPTS - firstPTS)
+        let dur = dur0
         let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0
         Log.line("""
           wrote \(frames) frames in \(String(format: "%.2f", dur))s \

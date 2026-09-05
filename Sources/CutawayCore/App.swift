@@ -1,54 +1,100 @@
 import AppKit
 import Foundation
+import AVFoundation
+
+private let base = NSString(string: "~/coding/tools/video-editor/tmp/claude")
+    .expandingTildeInPath
+private var recordingDir: URL { URL(fileURLWithPath: base + "/recordings") }
+private let outputSize = CGSize(width: 1920, height: 1080)
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var textView: NSTextView!
+    private var preview: PreviewController?
+    private var timelineView = TimelineView()
+    private var timeLabel = NSTextField(labelWithString: "0.00 / 0.00")
+    private var playButton: NSButton!
 
     func applicationDidFinishLaunching(_ note: Notification) {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 520),
-            styleMask: [.titled, .closable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 840),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false)
         window.title = "Cutaway"
         window.center()
 
-        let probe = NSButton(title: "Probe capture sources", target: self,
-                             action: #selector(runProbe))
-        probe.bezelStyle = .push
+        if let engine = try? RenderEngine() {
+            preview = PreviewController(engine: engine)
+        } else {
+            Log.line("ERROR: no Metal device, preview disabled")
+        }
 
-        let rec = NSButton(title: "Record 5s", target: self, action: #selector(record))
-        rec.bezelStyle = .push
+        let previewBox = NSView()
+        previewBox.wantsLayer = true
+        previewBox.layer?.backgroundColor = NSColor.black.cgColor
+        if let v = preview?.view {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            previewBox.addSubview(v)
+            NSLayoutConstraint.activate([
+                v.centerXAnchor.constraint(equalTo: previewBox.centerXAnchor),
+                v.centerYAnchor.constraint(equalTo: previewBox.centerYAnchor),
+                v.widthAnchor.constraint(equalTo: previewBox.widthAnchor),
+                v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: 9.0 / 16.0),
+            ])
+        }
 
-        let still = NSButton(title: "Render still", target: self, action: #selector(renderStill))
-        still.bezelStyle = .push
+        playButton = NSButton(title: "Play", target: self, action: #selector(togglePlay))
+        playButton.bezelStyle = .push
+        timeLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        timeLabel.textColor = .secondaryLabelColor
 
-        let exp = NSButton(title: "Export", target: self, action: #selector(exportVideo))
-        exp.bezelStyle = .push
+        let transport = NSStackView(views: [
+            playButton, timeLabel, NSView(),
+            button("Record 8s", #selector(record)),
+            button("Reload", #selector(reload)),
+            button("Export", #selector(exportVideo)),
+        ])
+        transport.orientation = .horizontal
+        transport.spacing = 8
+        transport.distribution = .fill
 
-        let buttons = NSStackView(views: [probe, rec, still, exp])
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
+        timelineView.translatesAutoresizingMaskIntoConstraints = false
+        timelineView.onSeek = { [weak self] t in
+            self?.preview?.pause()
+            self?.preview?.seek(to: t)
+        }
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         textView = NSTextView()
         textView.isEditable = false
-        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        textView.autoresizingMask = [.width]
+        textView.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
         scroll.documentView = textView
 
-        let stack = NSStackView(views: [buttons, scroll])
+        let stack = NSStackView(views: [previewBox, transport, timelineView, scroll])
         stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = stack
+
         NSLayoutConstraint.activate([
-            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32),
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 420),
+            previewBox.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
+            previewBox.heightAnchor.constraint(equalTo: previewBox.widthAnchor,
+                                               multiplier: 9.0 / 16.0),
+            timelineView.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
+            timelineView.heightAnchor.constraint(equalToConstant: 70),
+            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
+            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 110),
         ])
+
+        preview?.onTimeChange = { [weak self] t in
+            guard let self else { return }
+            self.timelineView.playhead = t
+            self.timeLabel.stringValue = String(format: "%.2f / %.2f",
+                                                t, self.preview?.duration ?? 0)
+            self.playButton.title = (self.preview?.isPlaying ?? false) ? "Pause" : "Play"
+        }
 
         Log.sink = { [weak self] s in
             DispatchQueue.main.async { self?.append(s) }
@@ -57,93 +103,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        // lets the dev loop drive a recording without a human clicking
-        // `open --env` is unreliable, so the dev loop drops a trigger file
-        // instead. Consumed on read so it only fires once.
-        let trigger = NSString(string: "~/Library/Application Support/Cutaway/autorecord")
-            .expandingTildeInPath
-        let stillTrigger = NSString(string: "~/Library/Application Support/Cutaway/autostill")
-            .expandingTildeInPath
-        let exportTrigger = NSString(string: "~/Library/Application Support/Cutaway/autoexport")
-            .expandingTildeInPath
-        if FileManager.default.fileExists(atPath: exportTrigger) {
-            try? FileManager.default.removeItem(atPath: exportTrigger)
-            exportVideo()
-        } else if FileManager.default.fileExists(atPath: stillTrigger) {
-            try? FileManager.default.removeItem(atPath: stillTrigger)
-            renderStill()
-        } else if FileManager.default.fileExists(atPath: trigger) {
-            try? FileManager.default.removeItem(atPath: trigger)
-            record()
-        } else {
-            runProbe()
-        }
+        reload()
+        handleTriggers()
+    }
+
+    private func button(_ title: String, _ action: Selector) -> NSButton {
+        let b = NSButton(title: title, target: self, action: action)
+        b.bezelStyle = .push
+        return b
     }
 
     private func append(_ s: String) {
         textView.textStorage?.append(NSAttributedString(
             string: s + "\n",
             attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
                 .foregroundColor: NSColor.labelColor,
             ]))
         textView.scrollToEndOfDocument(nil)
     }
 
-    @objc private func exportVideo() {
-        textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
-        let base = NSString(string: "~/coding/tools/video-editor/tmp/claude")
-            .expandingTildeInPath
-        Task {
-            do {
-                try await Export.run(
-                    recordingDir: URL(fileURLWithPath: base + "/recordings"),
-                    to: URL(fileURLWithPath: base + "/export.mp4"))
-            } catch { Log.line("ERROR: \(error)") }
-        }
+    // MARK: actions
+
+    @objc private func togglePlay() {
+        preview?.togglePlay()
+        playButton.title = (preview?.isPlaying ?? false) ? "Pause" : "Play"
     }
 
-    @objc private func renderStill() {
-        textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
-        let base = NSString(string: "~/coding/tools/video-editor/tmp/claude")
-            .expandingTildeInPath
-        Task {
-            do {
-                let dir = URL(fileURLWithPath: base + "/recordings")
-                // Sweep a few moments so a layout can be judged at a glance.
-                for (i, t) in [1.25, 1.85, 2.30, 3.40].enumerated() {
-                    try await Still.render(
-                        recordingDir: dir, at: t,
-                        timeline: Export.defaultTimeline(
-                            recordingDir: dir,
-                            screenSize: CGSize(width: 3024, height: 1964),
-                            duration: 4.93, hasWebcam: true),
-                        to: URL(fileURLWithPath: base + "/still\(i + 1).png"))
-                }
-            } catch { Log.line("ERROR: \(error)") }
+    @objc private func reload() {
+        guard FileManager.default.fileExists(
+                atPath: recordingDir.appendingPathComponent("recording.json").path) else {
+            Log.line("no recording yet - hit Record")
+            return
         }
+        guard let m = Manifest.load(from: recordingDir.appendingPathComponent("recording.json"))
+        else { return }
+
+        let screenSize = CGSize(width: m.screen.pixelSize[0], height: m.screen.pixelSize[1])
+        let webcamSize = m.webcam.map { CGSize(width: $0.pixelSize[0], height: $0.pixelSize[1]) }
+        let tl = Export.defaultTimeline(recordingDir: recordingDir,
+                                        screenSize: screenSize,
+                                        duration: m.screen.duration,
+                                        hasWebcam: m.webcam != nil)
+        timelineView.duration = m.screen.duration
+        timelineView.timeline = tl
+        preview?.load(recordingDir: recordingDir, outputSize: outputSize,
+                      timeline: tl, screenSize: screenSize, webcamSize: webcamSize)
+        Log.line(String(format: "loaded %.2fs, screen %.0fx%.0f, webcam %@",
+                        m.screen.duration, screenSize.width, screenSize.height,
+                        webcamSize.map { "\(Int($0.width))x\(Int($0.height))" } ?? "none"))
     }
 
     @objc private func record() {
-        textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
-        let url = URL(fileURLWithPath: NSString(string:
-            "~/coding/tools/video-editor/tmp/claude/recordings/display.mov")
-            .expandingTildeInPath)
+        preview?.pause()
         Task {
             let r = Recorder()
-            r.captureWebcam = true
-            r.showCursorForVerification =
-                FileManager.default.fileExists(atPath: NSString(
-                    string: "~/Library/Application Support/Cutaway/verify")
-                    .expandingTildeInPath)
-            do { try await r.record(seconds: 5, to: url) }
-            catch { Log.line("ERROR: \(error)") }
+            r.captureWebcam = !FileManager.default.fileExists(atPath: NSString(
+                string: "~/Library/Application Support/Cutaway/noWebcam").expandingTildeInPath)
+            do {
+                try await r.record(seconds: 8,
+                                   to: recordingDir.appendingPathComponent("display.mov"))
+                await MainActor.run { self.reload() }
+            } catch { Log.line("ERROR: \(error)") }
         }
     }
 
-    @objc private func runProbe() {
-        textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
-        Task { await Probe.listContent() }
+    @objc private func exportVideo() {
+        Task {
+            do {
+                try await Export.run(recordingDir: recordingDir,
+                                     to: URL(fileURLWithPath: base + "/export.mp4"))
+            } catch { Log.line("ERROR: \(error)") }
+        }
+    }
+
+    /// Lets the dev loop drive the app without a human clicking.
+    private func handleTriggers() {
+        let dir = NSString(string: "~/Library/Application Support/Cutaway")
+            .expandingTildeInPath
+        func consume(_ name: String) -> Bool {
+            let p = dir + "/" + name
+            guard FileManager.default.fileExists(atPath: p) else { return false }
+            try? FileManager.default.removeItem(atPath: p)
+            return true
+        }
+        if consume("autosnap") {
+            // Give the preview a moment to load and draw a real frame.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                Task {
+                    self.preview?.seek(to: 3.0)
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    try? await Snapshot.captureDisplay(
+                        to: URL(fileURLWithPath: base + "/editor.png"))
+                }
+            }
+        }
+        else if consume("autorecord") { record() }
+        else if consume("autoexport") { exportVideo() }
+        else if consume("autoplay") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                self?.preview?.seek(to: 2.4)
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
@@ -156,7 +217,6 @@ public func cutaway_main() {
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
-    _ = delegate  // keep alive; NSApplication holds only a weak delegate
     appDelegate = delegate
     app.setActivationPolicy(.regular)
     app.run()

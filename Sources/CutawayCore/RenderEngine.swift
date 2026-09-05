@@ -83,9 +83,13 @@ public final class RenderEngine {
         return device.makeTexture(descriptor: td)
     }
 
+    /// `present` is the on-screen drawable when rendering the live preview.
+    /// Same command buffer, so the preview and the export differ only in where
+    /// the pixels land.
     @discardableResult
     public func draw(background: BackgroundParams, layers: [Draw],
-                     into target: MTLTexture) -> Bool {
+                     into target: MTLTexture,
+                     present: (any MTLDrawable)? = nil) -> Bool {
         guard let cb = queue.makeCommandBuffer() else { return false }
 
         let pass = MTLRenderPassDescriptor()
@@ -110,8 +114,13 @@ public final class RenderEngine {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
         enc.endEncoding()
-        cb.commit()
-        cb.waitUntilCompleted()
+        if let present {
+            cb.present(present)
+            cb.commit()
+        } else {
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
         return true
     }
 
