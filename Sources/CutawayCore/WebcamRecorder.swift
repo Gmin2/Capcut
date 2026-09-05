@@ -30,6 +30,16 @@ public final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBuffe
     /// that so it has time to warm up, which on this Mac takes ~300ms.
     public func setAnchor(_ t: CMTime) { anchor = t }
 
+    /// The camera takes ~1s to produce its first frame. Waiting for it before
+    /// the screen stream starts means a talking-head opening actually has a
+    /// picture from frame zero, instead of a blank first second.
+    public func waitForFirstFrame(timeout: Double = 3.0) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !sessionStarted && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     public func start(to url: URL, preset: AVCaptureSession.Preset = .hd1920x1080) throws {
 
         guard let device = AVCaptureDevice.default(for: .video) else {

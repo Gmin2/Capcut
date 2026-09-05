@@ -80,16 +80,37 @@ public enum Export {
             duration = CMTimeGetSeconds(try await a.load(.duration))
         }
 
-        let tl = timeline ?? defaultTimeline(recordingDir: recordingDir,
-                                             screenSize: screen.size,
-                                             duration: duration,
-                                             hasWebcam: webcam != nil)
+        let project = loadOrCreateProject(recordingDir: recordingDir,
+                                          screenSize: screen.size,
+                                          duration: duration,
+                                          hasWebcam: webcam != nil)
+        let tl = timeline ?? project.timeline(
+            sourceSize: screen.size, cursor: Events.load(from: recordingDir).cursor)
+
+        // Narration is synthesised before the video loop so its length can
+        // extend the export when a line runs past the last frame.
+        var voiceURL: URL?
+        var voiceDuration = 0.0
+        if let vo = project.voiceover, !vo.lines.isEmpty {
+            let u = recordingDir.appendingPathComponent("voiceover.m4a")
+            voiceDuration = (try? await VoiceoverRenderer.render(
+                vo, duration: duration, to: u)) ?? 0
+            if voiceDuration > 0 { voiceURL = u }
+        }
+        let renderDuration = max(duration, voiceDuration)
         let state = RenderState(screenSize: screen.size, webcamSize: webcam?.size,
                                 outputSize: outputSize, timeline: tl)
         let engine = try RenderEngine()
 
+        // Video first, audio muxed after. Feeding an audio input only once the
+        // video is done makes AVAssetWriter stall waiting to interleave, so the
+        // two are kept in separate passes.
+        let videoURL = voiceURL == nil ? url
+            : url.deletingLastPathComponent()
+                 .appendingPathComponent("." + url.lastPathComponent + ".video.mp4")
         try? FileManager.default.removeItem(at: url)
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        try? FileManager.default.removeItem(at: videoURL)
+        let writer = try AVAssetWriter(outputURL: videoURL, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.hevc,
             AVVideoWidthKey: Int(outputSize.width),
@@ -112,7 +133,7 @@ public enum Export {
         writer.startSession(atSourceTime: .zero)
 
         let started = Date()
-        let total = max(1, Int(duration * Double(fps)))
+        let total = max(1, Int(renderDuration * Double(fps)))
         var written = 0
 
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
@@ -149,15 +170,66 @@ public enum Export {
             }
         }
         await writer.finishWriting()
+        if let voiceURL {
+            try await mux(video: videoURL, audio: voiceURL, to: url)
+            try? FileManager.default.removeItem(at: videoURL)
+        }
 
         let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0
         Log.line("""
           export: \(written)/\(total) frames \(Int(outputSize.width))x\(Int(outputSize.height)) \
           @\(fps) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s, \
           \(String(format: "%.1f", Double(size) / 1_048_576)) MB, \
-          webcam=\(webcam != nil ? "yes" : "no"), writer=\(writer.status.rawValue) \
+          webcam=\(webcam != nil ? "yes" : "no"), \
+          audio=\(voiceURL != nil ? String(format: "%.1fs", voiceDuration) : "none"), \
+          writer=\(writer.status.rawValue) \
           \(writer.error.map { "err=\($0.localizedDescription)" } ?? "")
           """)
+    }
+
+    /// Reads project.json, or writes a sensible default derived from the
+    /// recording so there is always a file to edit.
+    public static func loadOrCreateProject(recordingDir: URL, screenSize: CGSize,
+                                           duration: Double, hasWebcam: Bool) -> Project {
+        if let p = Project.load(from: recordingDir) { return p }
+        let manifest = Manifest.load(from: recordingDir.appendingPathComponent("recording.json"))
+            ?? Manifest(screen: .init(file: "display.mov",
+                                      pixelSize: [screenSize.width, screenSize.height],
+                                      offset: 0, duration: duration, frames: 0),
+                        webcam: nil)
+        let p = Project.makeDefault(recordingDir: recordingDir, manifest: manifest)
+        try? p.write(to: recordingDir)
+        Log.line("wrote default \(Project.filename)")
+        return p
+    }
+
+    /// Passthrough mux: no re-encode, so it costs a fraction of a second.
+    static func mux(video: URL, audio: URL, to out: URL) async throws {
+        let comp = AVMutableComposition()
+        let vAsset = AVURLAsset(url: video)
+        let aAsset = AVURLAsset(url: audio)
+
+        guard let vTrack = try await vAsset.loadTracks(withMediaType: .video).first,
+              let vDst = comp.addMutableTrack(withMediaType: .video,
+                                              preferredTrackID: kCMPersistentTrackID_Invalid)
+        else { throw NSError(domain: "cutaway", code: 60) }
+        let vDur = try await vAsset.load(.duration)
+        try vDst.insertTimeRange(CMTimeRange(start: .zero, duration: vDur), of: vTrack, at: .zero)
+
+        if let aTrack = try await aAsset.loadTracks(withMediaType: .audio).first,
+           let aDst = comp.addMutableTrack(withMediaType: .audio,
+                                           preferredTrackID: kCMPersistentTrackID_Invalid) {
+            let aDur = try await aAsset.load(.duration)
+            try aDst.insertTimeRange(CMTimeRange(start: .zero,
+                                                 duration: min(aDur, vDur)),
+                                     of: aTrack, at: .zero)
+        }
+
+        guard let session = AVAssetExportSession(asset: comp,
+                                                 presetName: AVAssetExportPresetPassthrough)
+        else { throw NSError(domain: "cutaway", code: 61) }
+        try? FileManager.default.removeItem(at: out)
+        try await session.export(to: out, as: .mp4)
     }
 
     static func defaultTimeline(recordingDir: URL, screenSize: CGSize,

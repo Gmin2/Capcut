@@ -91,6 +91,7 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
                 do {
                     try wc.start(to: url.deletingLastPathComponent()
                         .appendingPathComponent("webcam.mov"))
+                    await wc.waitForFirstFrame()
                     webcam = wc
                 } catch { Log.line("webcam unavailable: \(error.localizedDescription)") }
             } else {

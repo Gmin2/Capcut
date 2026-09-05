@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timelineView = TimelineView()
     private var timeLabel = NSTextField(labelWithString: "0.00 / 0.00")
     private var playButton: NSButton!
+    private var watcher: FileWatcher?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         window = NSWindow(
@@ -103,6 +104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
+        let voices = VoiceoverRenderer.availableVoices()
+        let premium = voices.filter { $0.quality != "default" }
+        Log.line("voices: \(voices.count) english, \(premium.count) enhanced/premium")
+        for v in premium.prefix(6) { Log.line("  \(v.name) [\(v.quality)]  \(v.identifier)") }
+
         reload()
         handleTriggers()
     }
@@ -141,17 +147,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let screenSize = CGSize(width: m.screen.pixelSize[0], height: m.screen.pixelSize[1])
         let webcamSize = m.webcam.map { CGSize(width: $0.pixelSize[0], height: $0.pixelSize[1]) }
-        let tl = Export.defaultTimeline(recordingDir: recordingDir,
-                                        screenSize: screenSize,
-                                        duration: m.screen.duration,
-                                        hasWebcam: m.webcam != nil)
+        let project = Export.loadOrCreateProject(recordingDir: recordingDir,
+                                                 screenSize: screenSize,
+                                                 duration: m.screen.duration,
+                                                 hasWebcam: m.webcam != nil)
+        let tl = project.timeline(sourceSize: screenSize,
+                                  cursor: Events.load(from: recordingDir).cursor)
+
+        // Live-reload the edit when project.json changes on disk, so an
+        // external editor (or Claude) rewriting it updates the preview.
+        if watcher == nil {
+            let p = recordingDir.appendingPathComponent(Project.filename)
+            watcher = FileWatcher(url: p) { [weak self] in
+                Log.line("project.json changed, reloading")
+                self?.reload()
+            }
+        }
         timelineView.duration = m.screen.duration
         timelineView.timeline = tl
         preview?.load(recordingDir: recordingDir, outputSize: outputSize,
                       timeline: tl, screenSize: screenSize, webcamSize: webcamSize)
-        Log.line(String(format: "loaded %.2fs, screen %.0fx%.0f, webcam %@",
+        Log.line(String(format: "loaded %.2fs  screen %.0fx%.0f  webcam %@  %d scenes  %d zooms  %d vo lines",
                         m.screen.duration, screenSize.width, screenSize.height,
-                        webcamSize.map { "\(Int($0.width))x\(Int($0.height))" } ?? "none"))
+                        webcamSize.map { "\(Int($0.width))x\(Int($0.height))" } ?? "none",
+                        project.scenes.count, project.zooms.count,
+                        project.voiceover?.lines.count ?? 0))
     }
 
     @objc private func record() {
