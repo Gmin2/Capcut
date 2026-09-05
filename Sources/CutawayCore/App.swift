@@ -15,6 +15,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timeLabel = NSTextField(labelWithString: "0.00 / 0.00")
     private var playButton: NSButton!
     private var watcher: FileWatcher?
+    private var recorder: Recorder?
+    private var recordButton: NSButton!
+    private var pauseButton: NSButton!
+    private var recordLabel = NSTextField(labelWithString: "")
+    private var tick: Timer?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         window = NSWindow(
@@ -49,9 +54,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timeLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         timeLabel.textColor = .secondaryLabelColor
 
+        recordButton = button("Record", #selector(toggleRecord))
+        pauseButton = button("Pause", #selector(togglePause))
+        pauseButton.isEnabled = false
+        recordLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        recordLabel.textColor = .systemRed
+
         let transport = NSStackView(views: [
             playButton, timeLabel, NSView(),
-            button("Record 8s", #selector(record)),
+            recordButton, pauseButton, recordLabel,
             button("Reload", #selector(reload)),
             button("Export", #selector(exportVideo)),
         ])
@@ -152,7 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                  duration: m.screen.duration,
                                                  hasWebcam: m.webcam != nil)
         let tl = project.timeline(sourceSize: screenSize,
-                                  events: Events.load(from: recordingDir))
+                                  events: Events.load(from: recordingDir),
+                                  sourceDuration: m.screen.duration)
 
         // Live-reload the edit when project.json changes on disk, so an
         // external editor (or Claude) rewriting it updates the preview.
@@ -172,25 +184,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         webcamSize.map { "\(Int($0.width))x\(Int($0.height))" } ?? "none",
                         project.scenes.count, project.zooms.count,
                         project.voiceover?.lines.count ?? 0))
+        if !tl.timeMap.isIdentity {
+            Log.line(String(format: "  cuts: %d segments, %.2fs -> %.2fs",
+                            tl.timeMap.segments.count, m.screen.duration,
+                            tl.timeMap.outputDuration))
+        }
     }
 
-    @objc private func record() {
+    @objc private func toggleRecord() {
+        if let r = recorder, r.isRecording { stopRecording(r); return }
         preview?.pause()
+
+        let r = Recorder()
+        let sup = NSString(string: "~/Library/Application Support/Cutaway")
+            .expandingTildeInPath
+        func off(_ n: String) -> Bool {
+            FileManager.default.fileExists(atPath: sup + "/" + n)
+        }
+        r.captureWebcam = !off("noWebcam")
+        r.captureMicrophone = !off("noMic")
+        r.captureSystemAudio = !off("noSystemAudio")
+        r.onStateChange = { [weak self] in
+            DispatchQueue.main.async { self?.refreshRecordUI() }
+        }
+        recorder = r
+
         Task {
-            let r = Recorder()
-            let sup = NSString(string: "~/Library/Application Support/Cutaway")
-                .expandingTildeInPath
-            func off(_ n: String) -> Bool {
-                FileManager.default.fileExists(atPath: sup + "/" + n)
-            }
-            r.captureWebcam = !off("noWebcam")
-            r.captureMicrophone = !off("noMic")
-            r.captureSystemAudio = false
             do {
-                try await r.record(seconds: 8,
-                                   to: recordingDir.appendingPathComponent("display.mov"))
-                await MainActor.run { self.reload() }
+                try await r.start(to: recordingDir.appendingPathComponent("display.mov"))
+                await MainActor.run { self.startTick() }
+            } catch {
+                Log.line("ERROR: \(error)")
+                await MainActor.run { self.recorder = nil; self.refreshRecordUI() }
+            }
+        }
+    }
+
+    private func stopRecording(_ r: Recorder) {
+        stopTick()
+        Task {
+            do {
+                _ = try await r.stop()
+                await MainActor.run {
+                    self.recorder = nil
+                    self.refreshRecordUI()
+                    self.reload()
+                }
             } catch { Log.line("ERROR: \(error)") }
+        }
+    }
+
+    @objc private func togglePause() {
+        guard let r = recorder, r.isRecording else { return }
+        r.isPaused ? r.resume() : r.pause()
+        refreshRecordUI()
+    }
+
+    private func startTick() {
+        stopTick()
+        tick = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.refreshRecordUI()
+        }
+        refreshRecordUI()
+    }
+
+    private func stopTick() { tick?.invalidate(); tick = nil }
+
+    private func refreshRecordUI() {
+        let r = recorder
+        let live = r?.isRecording ?? false
+        recordButton.title = live ? "Stop" : "Record"
+        pauseButton.isEnabled = live
+        pauseButton.title = (r?.isPaused ?? false) ? "Resume" : "Pause"
+        if live, let r {
+            recordLabel.stringValue = String(format: "%@ %.1fs",
+                                             r.isPaused ? "PAUSED" : "REC", r.elapsed)
+            recordLabel.textColor = r.isPaused ? .systemOrange : .systemRed
+        } else {
+            recordLabel.stringValue = ""
         }
     }
 
@@ -266,7 +337,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        else if consume("autorecord") { record() }
+        else if consume("autorecord") {
+            // Records, pauses partway, resumes, then stops: exercises the whole
+            // transport without a human clicking.
+            toggleRecord()
+            let script: [(Double, () -> Void)] = [
+                (3.0, { [weak self] in self?.togglePause() }),
+                (5.0, { [weak self] in self?.togglePause() }),
+                (8.0, { [weak self] in
+                    if let r = self?.recorder { self?.stopRecording(r) } }),
+            ]
+            for (delay, action) in script {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
+            }
+        }
         else if consume("autoexport") { exportVideo() }
         else if consume("autoplay") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in

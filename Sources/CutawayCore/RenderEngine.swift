@@ -299,8 +299,11 @@ public final class RenderEngine {
         // and fading. Reads as a tap without stealing attention.
         if (P.rippleAlpha > 0.002) {
             float d = length(p - P.ripplePos);
-            float ring = smoothstep(P.rippleRadius, P.rippleRadius - 3.0, d)
-                       * (1.0 - smoothstep(P.rippleRadius - 9.0, P.rippleRadius - 5.0, d));
+            // A proper annulus: rises just inside the radius and falls at it.
+            // The previous form evaluated to 1 everywhere inside, which filled
+            // the whole disc instead of drawing a ring.
+            float ring = smoothstep(P.rippleRadius - 10.0, P.rippleRadius - 5.0, d)
+                       * (1.0 - smoothstep(P.rippleRadius - 2.0, P.rippleRadius + 1.0, d));
             float disc = 1.0 - smoothstep(0.0, P.rippleRadius, d);
             float a = clamp(max(ring, disc * 0.20), 0.0, 1.0)
                     * P.rippleAlpha * P.rippleColor.a;

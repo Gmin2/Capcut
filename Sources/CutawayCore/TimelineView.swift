@@ -40,6 +40,30 @@ public final class TimelineView: NSView {
         path.lineWidth = 1
         path.stroke()
 
+        // Cut spans, drawn under everything so kept material reads as solid.
+        if let tl = timeline, !tl.timeMap.isIdentity {
+            NSColor(calibratedWhite: 0.07, alpha: 1).setFill()
+            var prev = 0.0
+            for s in tl.timeMap.segments {
+                if s.sourceStart > prev {
+                    NSRect(x: x(prev), y: 0, width: max(1, x(s.sourceStart) - x(prev)),
+                           height: bounds.height).fill()
+                }
+                if s.speed > 1.01 {
+                    NSColor(calibratedRed: 0.85, green: 0.72, blue: 0.25, alpha: 0.22).setFill()
+                    NSRect(x: x(s.sourceStart), y: 0,
+                           width: max(1, x(s.sourceEnd) - x(s.sourceStart)),
+                           height: bounds.height).fill()
+                    NSColor(calibratedWhite: 0.07, alpha: 1).setFill()
+                }
+                prev = max(prev, s.sourceEnd)
+            }
+            if prev < duration {
+                NSRect(x: x(prev), y: 0, width: max(1, x(duration) - x(prev)),
+                       height: bounds.height).fill()
+            }
+        }
+
         drawLabel("scenes", y: laneGap)
         drawLabel("zoom", y: laneGap * 2 + laneHeight)
 

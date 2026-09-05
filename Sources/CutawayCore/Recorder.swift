@@ -3,41 +3,51 @@ import AVFoundation
 import ScreenCaptureKit
 import AppKit
 
-/// Crudest possible screen capture: one display, video only, fixed duration.
-/// Writes raw frames straight to disk and does nothing else, because any work
-/// done on the sample queue turns into dropped frames.
+/// Screen capture with pause. Writes raw frames straight to disk and does
+/// nothing else, because any work done on the sample queue turns into dropped
+/// frames.
 public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private let queue = DispatchQueue(label: "com.mintu.cutaway.capture")
+    public let clock = RecordClock()
 
     private var stream: SCStream?
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
+    private var url: URL?
 
     private var sessionStarted = false
     private var frames = 0
     private var incomplete = 0
-    private var notReady = 0
+    private var droppedWhilePaused = 0
     private var firstPTS = CMTime.zero
     private var lastPTS = CMTime.zero
+    private var size = CGSize.zero
+
     private var events: EventRecorder?
-    private var space: CaptureSpace?
-    /// Only for the alignment check: burns the real cursor into the frames so
-    /// logged positions can be compared against where it actually is.
-    public var showCursorForVerification = false
-    /// Off by default so a plain screen recording does not trip a camera prompt.
-    public var captureWebcam = false
     private var webcam: WebcamRecorder?
-    /// Narration and system sound. Off by default so a silent screen grab does
-    /// not trip a microphone prompt.
-    public var captureMicrophone = false
-    public var captureSystemAudio = false
     private var micWriter: AudioWriter?
     private var systemWriter: AudioWriter?
 
+    public var showCursorForVerification = false
+    public var captureWebcam = false
+    public var captureMicrophone = false
+    public var captureSystemAudio = false
+
+    public private(set) var isRecording = false
+    public var isPaused: Bool { clock.isPaused }
+    /// Recorded seconds so far, paused time excluded.
+    public var elapsed: Double { sessionStarted ? clock.elapsed() : 0 }
+    public var onStateChange: (() -> Void)?
+
     public override init() { super.init() }
 
-    public func record(seconds: Double, to url: URL) async throws {
+    // MARK: transport
+
+    public func start(to url: URL) async throws {
+        guard !isRecording else { return }
+        self.url = url
+
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true)
         guard let display = content.displays.first else {
@@ -45,14 +55,16 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
                           userInfo: [NSLocalizedDescriptionKey: "no display"])
         }
 
-        let scale = NSScreen.screens.first {
+        let screen = NSScreen.screens.first {
             ($0.deviceDescription[.init("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
-        }?.backingScaleFactor ?? 2
+        }
+        let scale = screen?.backingScaleFactor ?? 2
         let w = Int(CGFloat(display.width) * scale)
         let h = Int(CGFloat(display.height) * scale)
+        size = CGSize(width: w, height: h)
 
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: url)
 
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
@@ -80,37 +92,28 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         config.capturesAudio = captureSystemAudio
         config.captureMicrophone = captureMicrophone
 
-        let screenFrame = NSScreen.screens.first {
-            ($0.deviceDescription[.init("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
-        }?.frame ?? CGRect(x: 0, y: 0, width: CGFloat(display.width), height: CGFloat(display.height))
-        self.space = CaptureSpace(screenFrame: screenFrame, scale: scale)
-
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         if captureSystemAudio {
-            systemWriter = AudioWriter(url: url.deletingLastPathComponent()
-                .appendingPathComponent("system.m4a"))
+            systemWriter = AudioWriter(url: dir.appendingPathComponent("system.m4a"))
             try stream.addStreamOutput(self, type: .audio,
                                        sampleHandlerQueue: DispatchQueue(label: "cutaway.sysaudio"))
         }
         if captureMicrophone {
-            micWriter = AudioWriter(url: url.deletingLastPathComponent()
-                .appendingPathComponent("mic.m4a"))
+            micWriter = AudioWriter(url: dir.appendingPathComponent("mic.m4a"))
             try stream.addStreamOutput(self, type: .microphone,
                                        sampleHandlerQueue: DispatchQueue(label: "cutaway.mic"))
         }
         self.stream = stream
 
-        // Started before the screen stream so the camera is warm; the two are
-        // aligned afterwards by comparing first-frame timestamps, not by
-        // trying to start them simultaneously.
         if captureWebcam {
             if await WebcamRecorder.requestAccess() {
-                let wc = WebcamRecorder()
+                let wc = WebcamRecorder(clock: clock)
                 do {
-                    try wc.start(to: url.deletingLastPathComponent()
-                        .appendingPathComponent("webcam.mov"))
+                    try wc.start(to: dir.appendingPathComponent("webcam.mov"))
+                    // Wait for the first camera frame so a talking-head opening
+                    // actually has a picture from frame zero.
                     await wc.waitForFirstFrame()
                     webcam = wc
                 } catch { Log.line("webcam unavailable: \(error.localizedDescription)") }
@@ -119,69 +122,100 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
 
-        Log.line("recording \(w)x\(h) @60 for \(seconds)s -> \(url.lastPathComponent)")
+        let space = CaptureSpace(screenFrame: screen?.frame
+            ?? CGRect(x: 0, y: 0, width: CGFloat(display.width), height: CGFloat(display.height)),
+            scale: scale)
+        events = EventRecorder(space: space, clock: clock)
+
+        isRecording = true
+        Log.line("recording \(w)x\(h) @60 -> \(url.lastPathComponent)")
         try await stream.startCapture()
+        onStateChange?()
+    }
 
-        try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    public func pause() {
+        guard isRecording, !clock.isPaused else { return }
+        clock.pause()
+        Log.line(String(format: "paused at %.2fs", elapsed))
+        onStateChange?()
+    }
 
-        // Wall clock, not the last complete frame. ScreenCaptureKit stops
-        // sending frames when nothing changes, so a take that ends on a still
-        // screen would otherwise be silently truncated.
-        let endPTS = CMClockGetTime(CMClockGetHostTimeClock())
-        try await stream.stopCapture()
+    public func resume() {
+        guard isRecording, clock.isPaused else { return }
+        clock.resume()
+        Log.line(String(format: "resumed (%.2fs paused in total)", clock.pausedSeconds))
+        onStateChange?()
+    }
+
+    @discardableResult
+    public func stop() async throws -> Manifest? {
+        guard isRecording, let stream, let writer, let input, let url else { return nil }
+        if clock.isPaused { clock.resume() }
+        isRecording = false
+
+        let endPTS = clock.adjusted(RecordClock.now())
+        try? await stream.stopCapture()
         input.markAsFinished()
         await writer.finishWriting()
 
-        let dur0 = CMTimeGetSeconds(endPTS - firstPTS)
+        let duration = CMTimeGetSeconds(endPTS - firstPTS)
         let webcamTrack = await webcam?.stop()
         let micTrack = await micWriter?.finish(anchor: firstPTS)
         let sysTrack = await systemWriter?.finish(anchor: firstPTS)
-        if let m = micTrack {
-            Log.line(String(format: "mic: %.2fs, offset %+.3fs, %d buffers",
-                            m.duration, m.offset, m.frames))
-        }
 
+        let dir = url.deletingLastPathComponent()
         let manifest = Manifest(
             screen: Manifest.Track(file: url.lastPathComponent,
-                                   pixelSize: [Double(w), Double(h)],
-                                   offset: 0, duration: dur0, frames: frames),
+                                   pixelSize: [size.width, size.height],
+                                   offset: 0, duration: duration, frames: frames),
             webcam: webcamTrack, mic: micTrack, systemAudio: sysTrack)
-        try manifest.write(to: url.deletingLastPathComponent()
-            .appendingPathComponent("recording.json"))
+        try manifest.write(to: dir.appendingPathComponent("recording.json"))
+        try events?.stop(duration: duration,
+                         to: dir.appendingPathComponent("events.json"))
 
-        // Transcribe straight after capture so the editor has words to work
-        // with the moment the recording lands.
+        Log.line(String(format: """
+          wrote %d frames in %.2fs (%.1f fps), incomplete=%d, paused=%.2fs, \
+          dropped-while-paused=%d, %.1f MB
+          """, frames, duration, Double(frames) / max(duration, 0.001),
+          incomplete, clock.pausedSeconds, droppedWhilePaused,
+          Double(((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0)
+            / 1_048_576))
+
         if let m = micTrack, m.duration > 0.5 {
-            let micURL = url.deletingLastPathComponent().appendingPathComponent(m.file)
             do {
-                let t = try await Transcriber.run(audio: micURL, offset: m.offset)
-                try t.write(to: url.deletingLastPathComponent())
-            } catch {
-                Log.line("transcript skipped: \(error.localizedDescription)")
-            }
+                let t = try await Transcriber.run(
+                    audio: dir.appendingPathComponent(m.file), offset: m.offset)
+                try t.write(to: dir)
+            } catch { Log.line("transcript skipped: \(error.localizedDescription)") }
         }
 
-        try events?.stop(duration: dur0,
-                         to: url.deletingLastPathComponent().appendingPathComponent("events.json"))
-
-        let dur = dur0
-        let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0
-        Log.line("""
-          wrote \(frames) frames in \(String(format: "%.2f", dur))s \
-          (\(String(format: "%.1f", Double(frames) / max(dur, 0.001))) fps), \
-          incomplete=\(incomplete) notReady=\(notReady), \
-          \(String(format: "%.1f", Double(size) / 1_048_576)) MB
-          """)
-        Log.line("status=\(writer.status.rawValue) error=\(writer.error?.localizedDescription ?? "none")")
+        self.stream = nil
+        onStateChange?()
+        return manifest
     }
+
+    // MARK: capture
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer,
                        of type: SCStreamOutputType) {
-        if type == .audio { systemWriter?.append(sb); return }
-        if type == .microphone { micWriter?.append(sb); return }
-        guard type == .screen, CMSampleBufferIsValid(sb) else { return }
+        // Paused: drop everything. Timestamps of later samples get the paused
+        // span subtracted, so the file ends up continuous.
+        if clock.isPaused {
+            if type == .screen { droppedWhilePaused += 1 }
+            return
+        }
 
-        // SCStream sends idle/blank frames too; only .complete carries pixels.
+        switch type {
+        case .audio:
+            if let r = Recorder.retime(sb, minus: clock.pausedOffset) { systemWriter?.append(r) }
+            return
+        case .microphone:
+            if let r = Recorder.retime(sb, minus: clock.pausedOffset) { micWriter?.append(r) }
+            return
+        default: break
+        }
+
+        guard type == .screen, CMSampleBufferIsValid(sb) else { return }
         guard let att = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false)
                 as? [[SCStreamFrameInfo: Any]],
               let raw = att.first?[.status] as? Int,
@@ -189,41 +223,54 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             incomplete += 1
             return
         }
-
-        guard let writer, let input else { return }
-        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+        guard let writer, let input,
+              let retimed = Recorder.retime(sb, minus: clock.pausedOffset) else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(retimed)
 
         if !sessionStarted {
             sessionStarted = true
             firstPTS = pts
+            clock.setAnchorIfNeeded(pts)
             writer.startWriting()
             writer.startSession(atSourceTime: pts)
-
-            // Ground truth for the clock-alignment risk: sample buffer PTS and
-            // the host clock should read the same, which is what lets event
-            // timestamps line up with video later.
-            let host = CMClockGetTime(CMClockGetHostTimeClock())
-            Log.line(String(format: "clock check  firstPTS=%.4f  hostClock=%.4f  delta=%.4f",
-                            CMTimeGetSeconds(pts), CMTimeGetSeconds(host),
-                            CMTimeGetSeconds(host) - CMTimeGetSeconds(pts)))
-
-            // Anchored to the first frame's PTS, so event times are in the same
-            // timeline as the video regardless of capture warmup.
             webcam?.setAnchor(pts)
-            if let space {
-                let er = EventRecorder(space: space)
-                er.start(anchor: pts)
-                events = er
-            }
+            events?.start()
         }
 
-        guard input.isReadyForMoreMediaData else { notReady += 1; return }
-        input.append(sb)
+        guard input.isReadyForMoreMediaData else { return }
+        input.append(retimed)
         frames += 1
         lastPTS = pts
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
         Log.line("stream stopped with error: \(error)")
+    }
+
+    /// Shifts a sample buffer's timestamps without touching its pixels.
+    static func retime(_ sb: CMSampleBuffer, minus offset: CMTime) -> CMSampleBuffer? {
+        guard offset != .zero else { return sb }
+        var count: CMItemCount = 0
+        guard CMSampleBufferGetSampleTimingInfoArray(sb, entryCount: 0, arrayToFill: nil,
+                                                     entriesNeededOut: &count) == noErr,
+              count > 0 else { return sb }
+        var timings = [CMSampleTimingInfo](repeating: CMSampleTimingInfo(), count: count)
+        guard CMSampleBufferGetSampleTimingInfoArray(sb, entryCount: count,
+                                                     arrayToFill: &timings,
+                                                     entriesNeededOut: nil) == noErr else { return sb }
+        for i in 0..<count {
+            if timings[i].presentationTimeStamp.isValid {
+                timings[i].presentationTimeStamp = timings[i].presentationTimeStamp - offset
+            }
+            if timings[i].decodeTimeStamp.isValid {
+                timings[i].decodeTimeStamp = timings[i].decodeTimeStamp - offset
+            }
+        }
+        var out: CMSampleBuffer?
+        guard CMSampleBufferCreateCopyWithNewTiming(
+                allocator: kCFAllocatorDefault, sampleBuffer: sb,
+                sampleTimingEntryCount: count, sampleTimingArray: &timings,
+                sampleBufferOut: &out) == noErr else { return sb }
+        return out
     }
 }

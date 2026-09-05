@@ -89,6 +89,8 @@ public final class Timeline: @unchecked Sendable {
     public var style: Style = .default
     public var cursorStyle = CursorStyle()
     public var clicks: [(t: Double, p: CGPoint)] = []
+    /// Cuts and speed ramps. Effects stay in source time; this maps to output.
+    public var timeMap = TimeMap(segments: [], sourceDuration: 0)
 
     /// Lightly smoothed pointer path, distinct from the camera's heavily damped
     /// focus track: the camera should lag, the pointer should not.
@@ -170,9 +172,10 @@ public final class Timeline: @unchecked Sendable {
         let out = CGPoint(x: dst.minX + local.x * dst.width,
                           y: dst.minY + local.y * dst.height)
 
-        let img = CursorImage.size
-        let k = cursorStyle.scale * (outputSize.height / 1080.0)
-        let w = img.width * k, h = img.height * k
+        // Sized from a fixed base height, not from the texture's resolution,
+        // so bumping the texture never changes how big the pointer looks.
+        let h = CursorImage.baseHeight * cursorStyle.scale * (outputSize.height / 1080.0)
+        let w = h * (CursorImage.size.width / CursorImage.size.height)
         let hot = CursorImage.hotSpotFraction
 
         var p = CursorParams()

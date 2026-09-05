@@ -26,8 +26,7 @@ public final class EventRecorder {
     }
 
     private let space: CaptureSpace
-    private let hostClock = CMClockGetHostTimeClock()
-    private var anchor = CMTime.zero          // first video frame PTS
+    private let clock: RecordClock
 
     private var cursor: [CursorSample] = []
     private var clicks: [Click] = []
@@ -38,13 +37,17 @@ public final class EventRecorder {
     private var appObserver: NSObjectProtocol?
     private let lock = NSLock()
 
-    public init(space: CaptureSpace) { self.space = space }
+    public init(space: CaptureSpace, clock: RecordClock) {
+        self.space = space
+        self.clock = clock
+    }
 
     /// `anchor` must be the presentation timestamp of the first video frame,
     /// not the time capture was requested. There is a warmup between the two,
     /// and using the wrong one puts every event a fixed offset out.
-    public func start(anchor: CMTime) {
-        self.anchor = anchor
+    /// Times come from the shared record clock, so events land in the same
+    /// timeline as the video and paused spans are excluded from both.
+    public func start() {
 
         // Sampled on a fixed timer rather than driven by .mouseMoved events:
         // move events are irregular, stop entirely when the pointer is still,
@@ -53,7 +56,7 @@ public final class EventRecorder {
         let t = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
         t.schedule(deadline: .now(), repeating: .milliseconds(8))   // 120 Hz
         t.setEventHandler { [weak self] in
-            guard let self else { return }
+            guard let self, !self.clock.isPaused else { return }
             let p = self.space.pixels(from: NSEvent.mouseLocation)
             self.lock.lock()
             self.cursor.append(CursorSample(t: self.now(), x: p.x, y: p.y))
@@ -66,7 +69,7 @@ public final class EventRecorder {
         // is why keycast is a separate opt-in later.
         let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         if let m = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] e in
-            guard let self else { return }
+            guard let self, !self.clock.isPaused else { return }
             let p = self.space.pixels(from: NSEvent.mouseLocation)
             let button = e.type == .rightMouseDown ? "right"
                        : e.type == .leftMouseDown ? "left" : "other"
@@ -91,9 +94,7 @@ public final class EventRecorder {
         }
     }
 
-    private func now() -> Double {
-        CMTimeGetSeconds(CMClockGetTime(hostClock) - anchor)
-    }
+    private func now() -> Double { clock.elapsed() }
 
     public func stop(duration: Double, to url: URL) throws {
         timer?.cancel(); timer = nil

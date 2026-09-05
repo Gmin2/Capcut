@@ -37,7 +37,8 @@ public enum Still {
             recordingDir: recordingDir, screenSize: screenSize,
             duration: manifest?.screen.duration ?? 0,
             hasWebcam: manifest?.webcam != nil)
-            .timeline(sourceSize: screenSize, events: Events.load(from: recordingDir))
+            .timeline(sourceSize: screenSize, events: Events.load(from: recordingDir),
+                      sourceDuration: manifest?.screen.duration ?? 0)
         let state = RenderState(screenSize: screenSize, webcamSize: webcamSize,
                                 outputSize: outputSize, timeline: tl)
         let f = state.evaluate(atSourceTime: seconds)

@@ -7,6 +7,13 @@ import AVFoundation
 public final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 
     private let session = AVCaptureSession()
+    private let clock: RecordClock
+
+    public init(clock: RecordClock) {
+        self.clock = clock
+        super.init()
+    }
+
     private let queue = DispatchQueue(label: "com.mintu.cutaway.webcam")
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
@@ -87,6 +94,10 @@ public final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBuffe
     public func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer,
                               from connection: AVCaptureConnection) {
         guard let writer, let input, CMSampleBufferIsValid(sb) else { return }
+        // Paused frames are discarded and paused time is removed from every
+        // later timestamp, so the camera track stays in step with the screen.
+        if clock.isPaused { return }
+        guard let sb = Recorder.retime(sb, minus: clock.pausedOffset) else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sb)
 
         if !sessionStarted {

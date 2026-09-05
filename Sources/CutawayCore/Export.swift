@@ -85,7 +85,8 @@ public enum Export {
                                           duration: duration,
                                           hasWebcam: webcam != nil)
         let tl = timeline ?? project.timeline(
-            sourceSize: screen.size, events: Events.load(from: recordingDir))
+            sourceSize: screen.size, events: Events.load(from: recordingDir),
+            sourceDuration: duration)
 
         // Narration is synthesised before the video loop so its length can
         // extend the export when a line runs past the last frame.
@@ -97,7 +98,10 @@ public enum Export {
                 vo, duration: duration, to: u)) ?? 0
             if voiceDuration > 0 { voiceURL = u }
         }
-        let renderDuration = max(duration, voiceDuration)
+        // Cuts shorten the video; narration can lengthen it again.
+        let editedDuration = tl.timeMap.outputDuration > 0
+            ? tl.timeMap.outputDuration : duration
+        let renderDuration = max(editedDuration, voiceDuration)
         let state = RenderState(screenSize: screen.size, webcamSize: webcam?.size,
                                 outputSize: outputSize, timeline: tl)
         let engine = try RenderEngine()
@@ -139,7 +143,10 @@ public enum Export {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 for i in 0..<total {
-                    let t = Double(i) / Double(fps)
+                    let outT = Double(i) / Double(fps)
+                    // Everything downstream works in source time; only this
+                    // line knows about cuts.
+                    let t = tl.timeMap.sourceTime(forOutput: outT)
                     let f = state.evaluate(atSourceTime: t)
 
                     var layers: [RenderEngine.Draw] = []
@@ -181,6 +188,7 @@ public enum Export {
           @\(fps) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s, \
           \(String(format: "%.1f", Double(size) / 1_048_576)) MB, \
           webcam=\(webcam != nil ? "yes" : "no"), \
+          segments=\(tl.timeMap.segments.count) (\(String(format: "%.2f", duration))s -> \(String(format: "%.2f", editedDuration))s), \
           audio=\(voiceURL != nil ? String(format: "%.1fs", voiceDuration) : "none"), \
           writer=\(writer.status.rawValue) \
           \(writer.error.map { "err=\($0.localizedDescription)" } ?? "")

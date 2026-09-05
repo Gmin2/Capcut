@@ -15,6 +15,8 @@ public struct Project: Codable {
     public var style = Style.default
     public var scenes: [Scene] = []
     public var zooms: [Zoom] = []
+    /// Kept spans of the recording. Empty means keep everything.
+    public var segments: [Segment] = []
     public var cursor = CursorStyle()
     public var voiceover: Voiceover?
 
@@ -48,6 +50,9 @@ public struct Project: Codable {
         let ev = Events.load(from: recordingDir)
         p.zooms = AutoZoom.generate(clicks: ev.clicks, sourceSize: screenSize,
                                     duration: manifest.screen.duration)
+        p.segments = AutoCut.segments(events: ev,
+                                      transcript: Transcript.load(from: recordingDir),
+                                      duration: manifest.screen.duration)
         p.scenes = manifest.webcam != nil
             ? [Scene(at: 0, layout: "talkingHead"),
                Scene(at: manifest.screen.duration * 0.35, layout: "demo", transition: 0.8)]
@@ -58,12 +63,14 @@ public struct Project: Codable {
         return p
     }
 
-    public func timeline(sourceSize: CGSize, events: Events) -> Timeline {
+    public func timeline(sourceSize: CGSize, events: Events,
+                         sourceDuration: Double = 0) -> Timeline {
         let tl = Timeline(zooms: zooms, sourceSize: sourceSize, cursor: events.cursor)
         tl.scenes = scenes.isEmpty ? [Scene(at: 0, layout: "screenOnly")] : scenes
         tl.style = style
         tl.cursorStyle = self.cursor
         tl.clicks = events.clicks
+        tl.timeMap = TimeMap(segments: segments, sourceDuration: sourceDuration)
         return tl
     }
 }
