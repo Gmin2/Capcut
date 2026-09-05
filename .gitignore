@@ -4,3 +4,4 @@ tmp/
 DerivedData/
 *.cutaway/
 .DS_Store
+.swiftpm/xcode/**/xcuserdata/
