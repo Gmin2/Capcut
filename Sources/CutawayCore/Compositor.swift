@@ -9,17 +9,20 @@ public final class RenderState: @unchecked Sendable {
     public let style: Style
     public let sourceSize: CGSize
     public let outputSize: CGSize
+    public let timeline: Timeline?
 
-    public init(style: Style, sourceSize: CGSize, outputSize: CGSize) {
+    public init(style: Style, sourceSize: CGSize, outputSize: CGSize,
+                timeline: Timeline? = nil) {
         self.style = style
         self.sourceSize = sourceSize
         self.outputSize = outputSize
+        self.timeline = timeline
     }
 
     /// Pure: model plus time in, flat numbers out. All animation logic will live
     /// here, which keeps it unit testable and keeps the shader dumb.
     public func evaluate(atSourceTime t: Double) -> RenderParams {
-        let crop = CGRect(origin: .zero, size: sourceSize)   // zoom lands here
+        let crop = timeline?.crop(at: t) ?? CGRect(origin: .zero, size: sourceSize)
         return style.params(outputSize: outputSize, sourceSize: sourceSize, crop: crop)
     }
 }
@@ -31,6 +34,10 @@ public final class CutawayCompositor: NSObject, AVVideoCompositing {
 
     nonisolated(unsafe) public static var state: RenderState?
     nonisolated(unsafe) private static var engine: RenderEngine?
+    /// Counts how many frames AVFoundation actually asked for, which is the
+    /// only way to tell whether the composition is driving output timing or
+    /// just following the source track.
+    nonisolated(unsafe) public static var requestCount = 0
     private static let lock = NSLock()
 
     public var sourcePixelBufferAttributes: [String: any Sendable]? = [
@@ -62,6 +69,8 @@ public final class CutawayCompositor: NSObject, AVVideoCompositing {
             request.finish(with: NSError(domain: "cutaway", code: 11))
             return
         }
+
+        Self.lock.lock(); Self.requestCount += 1; Self.lock.unlock()
 
         let params = state.evaluate(
             atSourceTime: CMTimeGetSeconds(request.compositionTime))

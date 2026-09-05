@@ -8,21 +8,21 @@ import CoreMedia
 /// look at a pixel.
 public final class EventRecorder {
 
-    public struct CursorSample: Codable { let t: Double; let x: Double; let y: Double }
+    public struct CursorSample: Codable { public let t: Double; public let x: Double; public let y: Double }
     public struct Click: Codable {
-        let t: Double; let x: Double; let y: Double
-        let button: String; let clickCount: Int
+        public let t: Double; public let x: Double; public let y: Double
+        public let button: String; public let clickCount: Int
     }
-    public struct AppSwitch: Codable { let t: Double; let bundleId: String; let name: String }
+    public struct AppSwitch: Codable { public let t: Double; public let bundleId: String; public let name: String }
 
     public struct Events: Codable {
-        let version: Int
-        let displayPixelSize: [Double]
-        let backingScale: Double
-        let duration: Double
-        let cursor: [CursorSample]
-        let clicks: [Click]
-        let apps: [AppSwitch]
+        public let version: Int
+        public let displayPixelSize: [Double]
+        public let backingScale: Double
+        public let duration: Double
+        public let cursor: [CursorSample]
+        public let clicks: [Click]
+        public let apps: [AppSwitch]
     }
 
     private let space: CaptureSpace
