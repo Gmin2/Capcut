@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>                <string>Cutaway</string>
+  <key>CFBundleDisplayName</key>         <string>Cutaway</string>
+  <key>CFBundleIdentifier</key>          <string>com.mintu.cutaway</string>
+  <key>CFBundleExecutable</key>          <string>cutaway</string>
+  <key>CFBundlePackageType</key>         <string>APPL</string>
+  <key>CFBundleShortVersionString</key>  <string>0.1</string>
+  <key>CFBundleVersion</key>             <string>1</string>
+  <key>LSMinimumSystemVersion</key>      <string>15.0</string>
+  <key>NSHighResolutionCapable</key>     <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Cutaway records your narration while you capture your screen.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Cutaway records your webcam so you can appear in your demo videos.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Cutaway transcribes your narration on-device so the editor can place cuts and zooms against what you said.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Cutaway uses Apple Events to reveal exported files in Finder.</string>
+</dict>
+</plist>

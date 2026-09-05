@@ -13,6 +13,8 @@ public final class RenderEngine {
     private let queue: MTLCommandQueue
     private let backgroundPipeline: MTLRenderPipelineState
     private let layerPipeline: MTLRenderPipelineState
+    private let cursorPipeline: MTLRenderPipelineState
+    private var cursorTexture: MTLTexture?
     private var textureCache: CVMetalTextureCache!
 
     public struct Draw {
@@ -55,7 +57,25 @@ public final class RenderEngine {
         att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         layerPipeline = try device.makeRenderPipelineState(descriptor: ly)
 
+        let cu = MTLRenderPipelineDescriptor()
+        cu.vertexFunction = library.makeFunction(name: "cutaway_vertex")
+        cu.fragmentFunction = library.makeFunction(name: "cutaway_cursor")
+        let cAtt = cu.colorAttachments[0]!
+        cAtt.pixelFormat = .bgra8Unorm
+        cAtt.isBlendingEnabled = true
+        cAtt.rgbBlendOperation = .add
+        cAtt.alphaBlendOperation = .add
+        cAtt.sourceRGBBlendFactor = .sourceAlpha
+        cAtt.sourceAlphaBlendFactor = .sourceAlpha
+        cAtt.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        cAtt.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        cursorPipeline = try device.makeRenderPipelineState(descriptor: cu)
+
         CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
+
+        if let cg = CursorImage.makeCGImage() {
+            cursorTexture = try? makeTexture(from: cg)
+        }
     }
 
     public func texture(from pb: CVPixelBuffer) -> MTLTexture? {
@@ -88,6 +108,7 @@ public final class RenderEngine {
     /// the pixels land.
     @discardableResult
     public func draw(background: BackgroundParams, layers: [Draw],
+                     cursor: CursorParams? = nil,
                      into target: MTLTexture,
                      present: (any MTLDrawable)? = nil) -> Bool {
         guard let cb = queue.makeCommandBuffer() else { return false }
@@ -113,6 +134,14 @@ public final class RenderEngine {
             enc.setFragmentBytes(&p, length: MemoryLayout<LayerParams>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
+        if let cursor, let tex = cursorTexture {
+            var c = cursor
+            enc.setRenderPipelineState(cursorPipeline)
+            enc.setFragmentTexture(tex, index: 0)
+            enc.setFragmentBytes(&c, length: MemoryLayout<CursorParams>.stride, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
+
         enc.endEncoding()
         if let present {
             cb.present(present)
@@ -125,15 +154,15 @@ public final class RenderEngine {
     }
 
     public func render(background: BackgroundParams, layers: [Draw],
-                       into dst: CVPixelBuffer) -> Bool {
+                       cursor: CursorParams? = nil, into dst: CVPixelBuffer) -> Bool {
         guard let target = texture(from: dst) else { return false }
-        return draw(background: background, layers: layers, into: target)
+        return draw(background: background, layers: layers, cursor: cursor, into: target)
     }
 
     public func renderImage(background: BackgroundParams, layers: [Draw],
-                            size: CGSize) throws -> CGImage {
+                            cursor: CursorParams? = nil, size: CGSize) throws -> CGImage {
         guard let target = makeTarget(width: Int(size.width), height: Int(size.height)),
-              draw(background: background, layers: layers, into: target) else {
+              draw(background: background, layers: layers, cursor: cursor, into: target) else {
             throw NSError(domain: "cutaway", code: 4)
         }
         return try Self.cgImage(from: target)
@@ -186,6 +215,17 @@ public final class RenderEngine {
         float borderWidth;
         float circle;
         float pad1; float pad2;
+    };
+
+    struct CursorParams {
+        float4 rect;
+        float4 rippleColor;
+        float2 outputSize;
+        float2 ripplePos;
+        float rippleRadius;
+        float rippleAlpha;
+        float opacity;
+        float pad0;
     };
 
     struct VOut { float4 pos [[position]]; float2 uv; };
@@ -246,6 +286,40 @@ public final class RenderEngine {
         // plate over shadow, then the blend state puts that over the background
         float3 cOut = (c * aPlate) / max(aOut, 0.0001);
         return float4(cOut, aOut);
+    }
+
+    fragment float4 cutaway_cursor(VOut in [[stage_in]],
+                                   texture2d<float> cur [[texture(0)]],
+                                   constant CursorParams& P [[buffer(0)]]) {
+        constexpr sampler smp(filter::linear, address::clamp_to_edge);
+        float2 p = in.uv * P.outputSize;
+        float4 acc = float4(0.0);
+
+        // Click feedback: a soft disc with a brighter leading ring, expanding
+        // and fading. Reads as a tap without stealing attention.
+        if (P.rippleAlpha > 0.002) {
+            float d = length(p - P.ripplePos);
+            float ring = smoothstep(P.rippleRadius, P.rippleRadius - 3.0, d)
+                       * (1.0 - smoothstep(P.rippleRadius - 9.0, P.rippleRadius - 5.0, d));
+            float disc = 1.0 - smoothstep(0.0, P.rippleRadius, d);
+            float a = clamp(max(ring, disc * 0.20), 0.0, 1.0)
+                    * P.rippleAlpha * P.rippleColor.a;
+            acc = float4(P.rippleColor.rgb, a);
+        }
+
+        float2 local = (p - P.rect.xy) / P.rect.zw;
+        if (local.x >= 0.0 && local.x <= 1.0 && local.y >= 0.0 && local.y <= 1.0) {
+            float4 c = cur.sample(smp, local);
+            // CoreGraphics hands us premultiplied alpha; undo it so the straight
+            // alpha blend state composites correctly.
+            float3 rgb = c.a > 0.003 ? c.rgb / c.a : float3(1.0);
+            float a = c.a * P.opacity;
+            float aOut = a + acc.a * (1.0 - a);
+            acc = float4((rgb * a + acc.rgb * acc.a * (1.0 - a)) / max(aOut, 0.0001), aOut);
+        }
+
+        if (acc.a < 0.003) { discard_fragment(); }
+        return acc;
     }
     """
 }

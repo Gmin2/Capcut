@@ -152,7 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                  duration: m.screen.duration,
                                                  hasWebcam: m.webcam != nil)
         let tl = project.timeline(sourceSize: screenSize,
-                                  cursor: Events.load(from: recordingDir).cursor)
+                                  events: Events.load(from: recordingDir))
 
         // Live-reload the edit when project.json changes on disk, so an
         // external editor (or Claude) rewriting it updates the preview.
@@ -178,13 +178,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         preview?.pause()
         Task {
             let r = Recorder()
-            r.captureWebcam = !FileManager.default.fileExists(atPath: NSString(
-                string: "~/Library/Application Support/Cutaway/noWebcam").expandingTildeInPath)
+            let sup = NSString(string: "~/Library/Application Support/Cutaway")
+                .expandingTildeInPath
+            func off(_ n: String) -> Bool {
+                FileManager.default.fileExists(atPath: sup + "/" + n)
+            }
+            r.captureWebcam = !off("noWebcam")
+            r.captureMicrophone = !off("noMic")
+            r.captureSystemAudio = false
             do {
                 try await r.record(seconds: 8,
                                    to: recordingDir.appendingPathComponent("display.mov"))
                 await MainActor.run { self.reload() }
             } catch { Log.line("ERROR: \(error)") }
+        }
+    }
+
+    /// Renders a sweep of composited frames to PNG. Faster than a full export
+    /// when judging a layout or the look of the cursor.
+    /// Overridable from disk so a verification sweep can target any moments.
+    private var stillTimes: [Double] {
+        let p = NSString(string: "~/Library/Application Support/Cutaway/stilltimes")
+            .expandingTildeInPath
+        if let text = try? String(contentsOfFile: p, encoding: .utf8) {
+            let v = text.split(whereSeparator: { ", \n".contains($0) })
+                        .compactMap { Double($0) }
+            if !v.isEmpty { return v }
+        }
+        return [1.25, 1.85, 2.30, 3.40]
+    }
+
+    @objc private func renderStill() {
+        Log.line("renderStill: \(stillTimes)")
+        Task {
+            for (i, t) in stillTimes.enumerated() {
+                do {
+                    try await Still.render(recordingDir: recordingDir, at: t,
+                                           to: URL(fileURLWithPath: base + "/still\(i + 1).png"))
+                } catch { Log.line("ERROR: \(error)") }
+            }
         }
     }
 
@@ -207,7 +239,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? FileManager.default.removeItem(atPath: p)
             return true
         }
-        if consume("autosnap") {
+        if consume("autotranscribe") {
+            Task {
+                let audio = recordingDir.appendingPathComponent("voiceover.m4a")
+                do {
+                    let t = try await Transcriber.run(audio: audio, offset: 0)
+                    try t.write(to: recordingDir)
+                    for s in t.sentences() {
+                        Log.line(String(format: "  [%.2f-%.2f] %@",
+                                        s.t, s.t + s.duration, s.text))
+                    }
+                } catch { Log.line("ERROR: \(error.localizedDescription)") }
+            }
+        }
+        else if consume("autostill") {
+            renderStill()
+        }
+        else if consume("autosnap") {
             // Give the preview a moment to load and draw a real frame.
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
                 Task {

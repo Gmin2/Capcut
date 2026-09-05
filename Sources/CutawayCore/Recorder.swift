@@ -28,6 +28,12 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Off by default so a plain screen recording does not trip a camera prompt.
     public var captureWebcam = false
     private var webcam: WebcamRecorder?
+    /// Narration and system sound. Off by default so a silent screen grab does
+    /// not trip a microphone prompt.
+    public var captureMicrophone = false
+    public var captureSystemAudio = false
+    private var micWriter: AudioWriter?
+    private var systemWriter: AudioWriter?
 
     public override init() { super.init() }
 
@@ -71,6 +77,8 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = showCursorForVerification
         config.queueDepth = 8
+        config.capturesAudio = captureSystemAudio
+        config.captureMicrophone = captureMicrophone
 
         let screenFrame = NSScreen.screens.first {
             ($0.deviceDescription[.init("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
@@ -80,6 +88,18 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        if captureSystemAudio {
+            systemWriter = AudioWriter(url: url.deletingLastPathComponent()
+                .appendingPathComponent("system.m4a"))
+            try stream.addStreamOutput(self, type: .audio,
+                                       sampleHandlerQueue: DispatchQueue(label: "cutaway.sysaudio"))
+        }
+        if captureMicrophone {
+            micWriter = AudioWriter(url: url.deletingLastPathComponent()
+                .appendingPathComponent("mic.m4a"))
+            try stream.addStreamOutput(self, type: .microphone,
+                                       sampleHandlerQueue: DispatchQueue(label: "cutaway.mic"))
+        }
         self.stream = stream
 
         // Started before the screen stream so the camera is warm; the two are
@@ -114,14 +134,32 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let dur0 = CMTimeGetSeconds(endPTS - firstPTS)
         let webcamTrack = await webcam?.stop()
+        let micTrack = await micWriter?.finish(anchor: firstPTS)
+        let sysTrack = await systemWriter?.finish(anchor: firstPTS)
+        if let m = micTrack {
+            Log.line(String(format: "mic: %.2fs, offset %+.3fs, %d buffers",
+                            m.duration, m.offset, m.frames))
+        }
 
         let manifest = Manifest(
             screen: Manifest.Track(file: url.lastPathComponent,
                                    pixelSize: [Double(w), Double(h)],
                                    offset: 0, duration: dur0, frames: frames),
-            webcam: webcamTrack)
+            webcam: webcamTrack, mic: micTrack, systemAudio: sysTrack)
         try manifest.write(to: url.deletingLastPathComponent()
             .appendingPathComponent("recording.json"))
+
+        // Transcribe straight after capture so the editor has words to work
+        // with the moment the recording lands.
+        if let m = micTrack, m.duration > 0.5 {
+            let micURL = url.deletingLastPathComponent().appendingPathComponent(m.file)
+            do {
+                let t = try await Transcriber.run(audio: micURL, offset: m.offset)
+                try t.write(to: url.deletingLastPathComponent())
+            } catch {
+                Log.line("transcript skipped: \(error.localizedDescription)")
+            }
+        }
 
         try events?.stop(duration: dur0,
                          to: url.deletingLastPathComponent().appendingPathComponent("events.json"))
@@ -139,6 +177,8 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer,
                        of type: SCStreamOutputType) {
+        if type == .audio { systemWriter?.append(sb); return }
+        if type == .microphone { micWriter?.append(sb); return }
         guard type == .screen, CMSampleBufferIsValid(sb) else { return }
 
         // SCStream sends idle/blank frames too; only .complete carries pixels.

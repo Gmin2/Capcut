@@ -15,6 +15,7 @@ public struct Project: Codable {
     public var style = Style.default
     public var scenes: [Scene] = []
     public var zooms: [Zoom] = []
+    public var cursor = CursorStyle()
     public var voiceover: Voiceover?
 
     public struct Output: Codable {
@@ -57,10 +58,12 @@ public struct Project: Codable {
         return p
     }
 
-    public func timeline(sourceSize: CGSize, cursor: [(t: Double, p: CGPoint)]) -> Timeline {
-        let tl = Timeline(zooms: zooms, sourceSize: sourceSize, cursor: cursor)
+    public func timeline(sourceSize: CGSize, events: Events) -> Timeline {
+        let tl = Timeline(zooms: zooms, sourceSize: sourceSize, cursor: events.cursor)
         tl.scenes = scenes.isEmpty ? [Scene(at: 0, layout: "screenOnly")] : scenes
         tl.style = style
+        tl.cursorStyle = self.cursor
+        tl.clicks = events.clicks
         return tl
     }
 }

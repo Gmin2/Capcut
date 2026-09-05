@@ -131,7 +131,7 @@ public final class PreviewController: NSObject, MTKViewDelegate {
             if let tex = lastWebcam { layers.append(.init(texture: tex, params: wp)) }
         }
 
-        engine.draw(background: f.background, layers: layers,
+        engine.draw(background: f.background, layers: layers, cursor: f.cursor,
                     into: drawable.texture, present: drawable)
         framesDrawn += 1
     }

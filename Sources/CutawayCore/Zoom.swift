@@ -79,6 +79,7 @@ public struct FrameDescription {
     public var background: BackgroundParams
     public var screen: LayerParams?
     public var webcam: LayerParams?
+    public var cursor: CursorParams?
 }
 
 public final class Timeline: @unchecked Sendable {
@@ -86,6 +87,13 @@ public final class Timeline: @unchecked Sendable {
     public let sourceSize: CGSize
     public var scenes: [Scene] = [Scene(at: 0, layout: "screenOnly")]
     public var style: Style = .default
+    public var cursorStyle = CursorStyle()
+    public var clicks: [(t: Double, p: CGPoint)] = []
+
+    /// Lightly smoothed pointer path, distinct from the camera's heavily damped
+    /// focus track: the camera should lag, the pointer should not.
+    private var drawTimes: [Double] = []
+    private var drawPoints: [CGPoint] = []
 
     /// Cursor smoothing is stateful, so it is integrated once here rather than
     /// recomputed per frame. Keeps evaluation pure and makes scrubbing exact:
@@ -112,6 +120,82 @@ public final class Timeline: @unchecked Sendable {
             focusTimes.append(s.t)
             focusPoints.append(focus)
         }
+
+        var draw = cursor[0].p
+        let a = 1.0 - min(max(0.0, 0.45), 0.95)
+        drawTimes.reserveCapacity(cursor.count)
+        drawPoints.reserveCapacity(cursor.count)
+        for s in cursor {
+            draw.x += (s.p.x - draw.x) * a
+            draw.y += (s.p.y - draw.y) * a
+            drawTimes.append(s.t)
+            drawPoints.append(draw)
+        }
+    }
+
+    private func sample(_ times: [Double], _ points: [CGPoint], _ t: Double) -> CGPoint? {
+        guard !times.isEmpty else { return nil }
+        if t <= times[0] { return points[0] }
+        if t >= times[times.count - 1] { return points[points.count - 1] }
+        var lo = 0, hi = times.count - 1
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2
+            if times[mid] <= t { lo = mid } else { hi = mid }
+        }
+        let span = times[hi] - times[lo]
+        let f = span > 0 ? (t - times[lo]) / span : 0
+        return CGPoint(x: points[lo].x + (points[hi].x - points[lo].x) * f,
+                       y: points[lo].y + (points[hi].y - points[lo].y) * f)
+    }
+
+    /// Maps the recorded pointer into output space through whatever crop and
+    /// placement the screen layer currently has, so it stays glued to the
+    /// pixel it was actually over even mid-zoom.
+    public func cursorParams(at t: Double, screen: LayerParams?,
+                             outputSize: CGSize) -> CursorParams? {
+        guard cursorStyle.visible, let screen, screen.opacity > 0.01,
+              let sp = sample(drawTimes, drawPoints, t) else { return nil }
+
+        let crop = CGRect(x: Double(screen.src.x), y: Double(screen.src.y),
+                          width: Double(screen.src.z), height: Double(screen.src.w))
+        let dst = CGRect(x: Double(screen.dst.x), y: Double(screen.dst.y),
+                         width: Double(screen.dst.z), height: Double(screen.dst.w))
+        guard crop.width > 0, crop.height > 0 else { return nil }
+
+        let local = CGPoint(x: (sp.x - crop.minX) / crop.width,
+                            y: (sp.y - crop.minY) / crop.height)
+        // Off the visible crop: no pointer rather than one pinned to the edge.
+        guard local.x >= -0.05, local.x <= 1.05, local.y >= -0.05, local.y <= 1.05
+        else { return nil }
+        let out = CGPoint(x: dst.minX + local.x * dst.width,
+                          y: dst.minY + local.y * dst.height)
+
+        let img = CursorImage.size
+        let k = cursorStyle.scale * (outputSize.height / 1080.0)
+        let w = img.width * k, h = img.height * k
+        let hot = CursorImage.hotSpotFraction
+
+        var p = CursorParams()
+        p.outputSize = SIMD2(Float(outputSize.width), Float(outputSize.height))
+        p.rect = SIMD4(Float(out.x - hot.x * w), Float(out.y - hot.y * h),
+                       Float(w), Float(h))
+        p.opacity = Float(screen.opacity)
+
+        if cursorStyle.clickRipple,
+           let c = clicks.last(where: { t >= $0.t && t - $0.t <= cursorStyle.rippleDuration }) {
+            let age = (t - c.t) / cursorStyle.rippleDuration
+            let cl = CGPoint(x: (c.p.x - crop.minX) / crop.width,
+                             y: (c.p.y - crop.minY) / crop.height)
+            let co = CGPoint(x: dst.minX + cl.x * dst.width,
+                             y: dst.minY + cl.y * dst.height)
+            let eased = CubicBezier.zoomIn.solve(age)
+            p.ripplePos = SIMD2(Float(co.x), Float(co.y))
+            p.rippleRadius = Float(cursorStyle.rippleRadius
+                                   * (outputSize.height / 1080.0) * (0.25 + eased))
+            p.rippleAlpha = Float((1 - age) * Double(screen.opacity))
+            p.rippleColor = Style.rgba(cursorStyle.rippleColor)
+        }
+        return p
     }
 
     func focus(at t: Double) -> CGPoint? {
@@ -199,7 +283,9 @@ public final class Timeline: @unchecked Sendable {
             screen = s
         }
         return FrameDescription(background: style.backgroundParams(outputSize: outputSize),
-                                screen: screen, webcam: webcam)
+                                screen: screen, webcam: webcam,
+                                cursor: cursorParams(at: t, screen: screen,
+                                                     outputSize: outputSize))
     }
 
     public func crop(at t: Double) -> CGRect {

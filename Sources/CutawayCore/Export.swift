@@ -85,7 +85,7 @@ public enum Export {
                                           duration: duration,
                                           hasWebcam: webcam != nil)
         let tl = timeline ?? project.timeline(
-            sourceSize: screen.size, cursor: Events.load(from: recordingDir).cursor)
+            sourceSize: screen.size, events: Events.load(from: recordingDir))
 
         // Narration is synthesised before the video loop so its length can
         // extend the export when a line runs past the last frame.
@@ -157,7 +157,7 @@ public enum Export {
                     guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &dst) == kCVReturnSuccess,
                           let dst else { continue }
                     guard engine.render(background: f.background, layers: layers,
-                                        into: dst) else { continue }
+                                        cursor: f.cursor, into: dst) else { continue }
 
                     while !input.isReadyForMoreMediaData { usleep(500) }
                     if adaptor.append(dst, withPresentationTime:

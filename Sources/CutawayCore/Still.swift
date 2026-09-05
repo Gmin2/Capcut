@@ -31,7 +31,13 @@ public enum Still {
             }
         }
 
-        let tl = timeline ?? Timeline(zooms: [], sourceSize: screenSize, cursor: [])
+        // Fall back to the project on disk so a still always matches what the
+        // preview and the export would produce.
+        let tl = timeline ?? Export.loadOrCreateProject(
+            recordingDir: recordingDir, screenSize: screenSize,
+            duration: manifest?.screen.duration ?? 0,
+            hasWebcam: manifest?.webcam != nil)
+            .timeline(sourceSize: screenSize, events: Events.load(from: recordingDir))
         let state = RenderState(screenSize: screenSize, webcamSize: webcamSize,
                                 outputSize: outputSize, timeline: tl)
         let f = state.evaluate(atSourceTime: seconds)
@@ -46,12 +52,13 @@ public enum Still {
         }
 
         let out = try engine.renderImage(background: f.background, layers: layers,
-                                         size: outputSize)
+                                         cursor: f.cursor, size: outputSize)
         try write(out, to: png)
         Log.line("""
           still t=\(String(format: "%.2f", seconds))s  \
           layers=\(layers.count)  \
           screen=\(f.screen.map { "\(Int($0.dst.z))x\(Int($0.dst.w))@\(Int($0.dst.x)),\(Int($0.dst.y)) op\(String(format: "%.2f", $0.opacity))" } ?? "none")  \
+          cursor=\(f.cursor.map { String(format: "rect %.0f,%.0f %.0fx%.0f op%.2f ripple r%.0f a%.2f", $0.rect.x, $0.rect.y, $0.rect.z, $0.rect.w, $0.opacity, $0.rippleRadius, $0.rippleAlpha) } ?? "NIL")  \
           webcam=\(f.webcam.map { "\(Int($0.dst.z))x\(Int($0.dst.w))@\(Int($0.dst.x)),\(Int($0.dst.y)) op\(String(format: "%.2f", $0.opacity))" } ?? "none")
           """)
     }

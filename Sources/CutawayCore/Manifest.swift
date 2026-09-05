@@ -7,6 +7,8 @@ public struct Manifest: Codable {
     public var version = 1
     public var screen: Track
     public var webcam: Track?
+    public var mic: Track?
+    public var systemAudio: Track?
 
     public struct Track: Codable {
         public var file: String
