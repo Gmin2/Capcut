@@ -8,7 +8,6 @@ private let outputSize = CGSize(width: 1920, height: 1080)
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
-    private var textView: NSTextView!
     private var preview: PreviewController?
     private var timelineView = TimelineView()
     private var timeLabel = NSTextField(labelWithString: "0.00 / 0.00")
@@ -21,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tick: Timer?
     private var hotkey: Hotkey?
     private var countdown = Countdown()
+    private let inspector = InspectorView()
+    private var statusLabel = Theme.mono("", size: 11)
 
     func applicationDidFinishLaunching(_ note: Notification) {
         window = NSWindow(
@@ -29,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered, defer: false)
         window.title = "Cutaway"
         window.center()
+        window.titlebarAppearsTransparent = true
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = Theme.background
+        window.minSize = NSSize(width: 980, height: 640)
 
         if let engine = try? RenderEngine() {
             preview = PreviewController(engine: engine)
@@ -39,159 +44,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let previewBox = NSView()
         previewBox.wantsLayer = true
         previewBox.layer?.backgroundColor = NSColor.black.cgColor
+        previewBox.layer?.cornerRadius = Theme.corner
+        previewBox.layer?.masksToBounds = true
         if let v = preview?.view {
             v.translatesAutoresizingMaskIntoConstraints = false
             previewBox.addSubview(v)
             NSLayoutConstraint.activate([
                 v.centerXAnchor.constraint(equalTo: previewBox.centerXAnchor),
                 v.centerYAnchor.constraint(equalTo: previewBox.centerYAnchor),
-                v.widthAnchor.constraint(equalTo: previewBox.widthAnchor),
+                // Fits by whichever axis runs out first, so the frame is never
+                // cropped and never stretched.
+                v.widthAnchor.constraint(lessThanOrEqualTo: previewBox.widthAnchor),
+                v.heightAnchor.constraint(lessThanOrEqualTo: previewBox.heightAnchor),
                 v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: 9.0 / 16.0),
+                {
+                    let w = v.widthAnchor.constraint(equalTo: previewBox.widthAnchor)
+                    w.priority = .defaultHigh
+                    return w
+                }(),
             ])
         }
 
-        playButton = NSButton(title: "Play", target: self, action: #selector(togglePlay))
-        playButton.bezelStyle = .push
-        timeLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        timeLabel.textColor = .secondaryLabelColor
-
-        recordButton = button("Record", #selector(toggleRecord))
-        pauseButton = button("Pause", #selector(togglePause))
+        playButton = FlatButton("Play", target: self, action: #selector(togglePlay))
+        recordButton = FlatButton("Record", kind: .danger, target: self,
+                                  action: #selector(toggleRecord))
+        pauseButton = FlatButton("Pause", target: self, action: #selector(togglePause))
         pauseButton.isEnabled = false
-        recordLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
-        recordLabel.textColor = .systemRed
+        let exportButton = FlatButton("Export", kind: .primary, target: self,
+                                      action: #selector(exportVideo))
+
+        timeLabel = Theme.mono("0.00 / 0.00")
+        recordLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+        recordLabel.textColor = Theme.recording
 
         let transport = NSStackView(views: [
             playButton, timeLabel, NSView(),
-            recordButton, pauseButton, recordLabel,
-            button("Reload", #selector(reload)),
-            button("Export", #selector(exportVideo)),
+            recordButton, pauseButton, recordLabel, NSView(),
+            FlatButton("Reload", target: self, action: #selector(reload)),
+            exportButton,
         ])
         transport.orientation = .horizontal
         transport.spacing = 8
-        transport.distribution = .fill
 
         timelineView.translatesAutoresizingMaskIntoConstraints = false
-        // Dragging a scene marker rewrites project.json, which the watcher
-        // picks up and reloads. One path for every edit, whether it came from
-        // the UI or from a script.
-        timelineView.onMoveScene = { [weak self] index, t in
-            self?.editProject { p in
-                var scenes = p.scenes.sorted { $0.at < $1.at }
-                guard index > 0, index < scenes.count else { return }
-                let lower = scenes[index - 1].at + 0.2
-                let upper = index + 1 < scenes.count
-                    ? scenes[index + 1].at - 0.2 : Double.greatestFiniteMagnitude
-                scenes[index].at = min(max(t, lower), upper)
-                p.scenes = scenes
-            }
-        }
+        timelineView.wantsLayer = true
+        timelineView.layer?.cornerRadius = Theme.corner
+        timelineView.layer?.masksToBounds = true
 
-        // Up and down adjust the zoom level under the playhead: it is the one
-        // zoom property a horizontal timeline cannot express.
-        timelineView.onNudgeZoomLevel = { [weak self] step in
-            guard let self else { return }
-            let t = self.preview?.sourceTime ?? 0
-            self.editProject { p in
-                guard let i = p.zooms.firstIndex(where: { t >= $0.start && t <= $0.end })
-                else { return }
-                p.zooms[i].level = min(max(p.zooms[i].level + step, 1.1), 4.0)
-                Log.line(String(format: "zoom level %.1fx", p.zooms[i].level))
-            }
-        }
+        // The log used to take a quarter of the window. It is diagnostics, so
+        // it belongs on one line where it can be read but not stared at.
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.textColor = Theme.textDim
 
-        timelineView.onMoveZoom = { [weak self] index, edge, t in
-            self?.editProject { p in
-                guard index < p.zooms.count else { return }
-                var z = p.zooms[index]
-                let minLength = 0.4
-                switch edge {
-                case -1: z.start = min(max(0, t), z.end - minLength)
-                case 1:  z.end = max(t, z.start + minLength)
-                default:
-                    // Moving the whole block keeps its length.
-                    let length = z.end - z.start
-                    z.start = max(0, t)
-                    z.end = z.start + length
-                }
-                // Ramps cannot outlast the block, or the zoom never reaches
-                // its level before starting to come back out.
-                let half = (z.end - z.start) / 2
-                z.inDuration = min(z.inDuration, half)
-                z.outDuration = min(z.outDuration, half)
-                p.zooms[index] = z
-                p.zooms.sort { $0.start < $1.start }
-            }
-        }
+        let left = NSStackView(views: [previewBox, transport, timelineView, statusLabel])
+        left.orientation = .vertical
+        left.spacing = Theme.gutter
+        left.alignment = .leading
+        // Only the preview stretches; the controls keep their natural height.
+        left.setHuggingPriority(.defaultLow, for: .vertical)
+        left.translatesAutoresizingMaskIntoConstraints = false
 
-        timelineView.onAddZoom = { [weak self] t in
-            self?.editProject { p in
-                var z = Zoom(start: max(0, t - 0.6), end: t + 1.8, level: 2.0)
-                z.anchor = [0.5, 0.5]
-                p.zooms.append(z)
-                p.zooms.sort { $0.start < $1.start }
-            }
-        }
+        inspector.translatesAutoresizingMaskIntoConstraints = false
+        inspector.apply = { [weak self] change in self?.editProject(change) }
 
-        timelineView.onDeleteZoom = { [weak self] index in
-            self?.editProject { p in
-                guard index < p.zooms.count else { return }
-                p.zooms.remove(at: index)
-            }
-        }
-
-        timelineView.onTrim = { [weak self] isStart, t in
-            self?.editProject { p in
-                let end = p.trimEnd ?? self?.timelineView.duration ?? t
-                if isStart {
-                    p.trimStart = min(max(0, t), end - 0.5)
-                } else {
-                    p.trimEnd = max(t, p.trimStart + 0.5)
-                }
-            }
-        }
-
-        timelineView.onAddScene = { [weak self] t in
-            self?.editProject { p in
-                var scenes = p.scenes.sorted { $0.at < $1.at }
-                // Alternate between the two layouts a demo actually switches
-                // between; anything more specific belongs in the JSON.
-                let previous = scenes.last(where: { $0.at <= t })?.layout ?? "screenOnly"
-                let next = previous == "demo" ? "talkingHead" : "demo"
-                scenes.append(Scene(at: t, layout: next, transition: 0.6))
-                p.scenes = scenes.sorted { $0.at < $1.at }
-            }
-        }
-
-        // The strip is in source time, the player is in edited time.
-        timelineView.onSeek = { [weak self] sourceT in
-            guard let self, let p = self.preview else { return }
-            p.pause()
-            p.seek(to: p.outputTime(forSource: sourceT))
-        }
-
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        textView = NSTextView()
-        textView.isEditable = false
-        textView.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-        scroll.documentView = textView
-
-        let stack = NSStackView(views: [previewBox, transport, timelineView, scroll])
-        stack.orientation = .vertical
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView = stack
+        let root = NSView()
+        root.wantsLayer = true
+        root.layer?.backgroundColor = Theme.background.cgColor
+        root.addSubview(left)
+        root.addSubview(inspector)
+        window.contentView = root
 
         NSLayoutConstraint.activate([
-            previewBox.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
-            previewBox.heightAnchor.constraint(equalTo: previewBox.widthAnchor,
-                                               multiplier: 9.0 / 16.0),
-            timelineView.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
+            left.topAnchor.constraint(equalTo: root.topAnchor, constant: Theme.gutter),
+            left.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: Theme.gutter),
+            left.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -Theme.gutter),
+
+            inspector.leadingAnchor.constraint(equalTo: left.trailingAnchor,
+                                               constant: Theme.gutter),
+            inspector.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            inspector.topAnchor.constraint(equalTo: root.topAnchor),
+            inspector.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            inspector.widthAnchor.constraint(equalToConstant: 236),
+
+            // The preview takes whatever space the fixed rows leave, so the
+            // window never has dead area under the timeline.
+            previewBox.widthAnchor.constraint(equalTo: left.widthAnchor),
+            transport.widthAnchor.constraint(equalTo: left.widthAnchor),
+            timelineView.widthAnchor.constraint(equalTo: left.widthAnchor),
             timelineView.heightAnchor.constraint(equalToConstant: 132),
-            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 110),
+            statusLabel.widthAnchor.constraint(equalTo: left.widthAnchor),
         ])
 
         preview?.onTimeChange = { [weak self] t in
@@ -203,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Log.sink = { [weak self] s in
-            DispatchQueue.main.async { self?.append(s) }
+            DispatchQueue.main.async { self?.statusLabel.stringValue = s }
         }
 
         window.makeKeyAndOrderFront(nil)
@@ -243,22 +184,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         reload()
-    }
-
-    private func button(_ title: String, _ action: Selector) -> NSButton {
-        let b = NSButton(title: title, target: self, action: action)
-        b.bezelStyle = .push
-        return b
-    }
-
-    private func append(_ s: String) {
-        textView.textStorage?.append(NSAttributedString(
-            string: s + "\n",
-            attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-                .foregroundColor: NSColor.labelColor,
-            ]))
-        textView.scrollToEndOfDocument(nil)
     }
 
     // MARK: actions
@@ -305,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             from: recordingDir.appendingPathComponent(m.screen.file))
         timelineView.loadWaveform(from: recordingDir, manifest: m)
         timelineView.window?.invalidateCursorRects(for: timelineView)
+        inspector.show(project)
         preview?.load(recordingDir: recordingDir, outputSize: outputSize,
                       timeline: tl, screenSize: screenSize, webcamSize: webcamSize)
         Log.line(String(format: "loaded %.2fs  screen %.0fx%.0f  webcam %@  %d scenes  %d zooms  %d vo lines",
