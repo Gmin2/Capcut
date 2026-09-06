@@ -25,6 +25,8 @@ public enum CLI {
             case "describe": return try describe(args)
             case "still":    return try await still(args)
             case "snap":     return try await snap(args)
+            case "pack":     return try pack(args)
+            case "trim":     return try trim(args)
             case "voices":   return voices()
             case "help", "--help", "-h": usage(); return 0
             default:
@@ -114,6 +116,13 @@ public enum CLI {
           still --at T[,T2,...] [--in DIR] [--out FILE] [--preset NAME]
               Renders composited frames to PNG. Much faster than an export
               when checking a layout or an overlay.
+
+          pack [--in DIR] [--out FILE.cutaway]
+              Wraps a recording into a single .cutaway document.
+
+          trim [--in DIR]
+              Deletes the raw capture, keeping the edit and the event log.
+              Do this once an export is approved; raw media is most of the size.
 
           snap [--out FILE]
               Screenshots the display through the app's capture grant.
@@ -243,6 +252,7 @@ public enum CLI {
         screen      \(Int(screenSize.width))x\(Int(screenSize.height))
         webcam      \(m.webcam.map { "\(Int($0.pixelSize[0]))x\(Int($0.pixelSize[1])), starts +\(fmt($0.offset))s" } ?? "none")
         mic         \(m.mic.map { "\(fmt($0.duration))s" } ?? "none")
+        size        \(String(format: "%.1f", Double(Document.inspect(dir).totalBytes) / 1_048_576)) MB
         events      \(events.clicks.count) clicks, \(events.cursor.count) cursor samples
         """)
 
@@ -307,6 +317,31 @@ public enum CLI {
             ?? URL(fileURLWithPath: NSTemporaryDirectory() + "cutaway-snap.png")
         try await Snapshot.captureDisplay(to: out)
         emit(out.path)
+        return 0
+    }
+
+    static func pack(_ args: [String]) throws -> Int32 {
+        let opts = Options(args)
+        let dir = opts.url("--in") ?? defaultDir
+        let out = opts.url("--out")
+            ?? dir.deletingLastPathComponent()
+                  .appendingPathComponent(dir.lastPathComponent)
+                  .appendingPathExtension(Document.fileExtension)
+        let doc = try Document.wrap(recordingDir: dir,
+                                    as: out.deletingPathExtension().lastPathComponent,
+                                    in: out.deletingLastPathComponent())
+        let c = Document.inspect(doc)
+        Log.line(String(format: "packed %.1f MB", Double(c.totalBytes) / 1_048_576))
+        emit(doc.path)
+        return 0
+    }
+
+    static func trim(_ args: [String]) throws -> Int32 {
+        let opts = Options(args)
+        let dir = opts.url("--in") ?? defaultDir
+        let freed = try Document.discardMedia(in: dir)
+        Log.line(String(format: "freed %.1f MB of raw capture", Double(freed) / 1_048_576))
+        emit(dir.path)
         return 0
     }
 

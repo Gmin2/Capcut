@@ -10,7 +10,13 @@ cutaway describe --in ~/demos/pitch
 cutaway export --in ~/demos/pitch --out ~/demos/pitch.mp4
 cutaway export --in ~/demos/pitch --preset vertical --out ~/demos/reel.mp4
 cutaway export --in ~/demos/pitch --all --out ~/demos/pitch.mp4
+cutaway pack --in ~/demos/pitch --out ~/demos/pitch.cutaway
+cutaway trim --in ~/demos/pitch.cutaway
 ```
+
+`pack` wraps a recording into a single `.cutaway` file in Finder (it is a
+package, so `project.json` inside stays hand-editable). `trim` deletes the raw
+capture once an export is approved, which is most of the size.
 
 ## Presets
 
@@ -80,3 +86,16 @@ Monitoring**, which macOS only applies on the next launch:
 Without the grant, recording carries on and simply logs no keys. Typing merges
 into words; chords like ⌘⇧P stay whole, because the chord is the interesting
 event and the letter is not.
+
+## Overlays and framing
+
+| field | |
+|---|---|
+| `callouts` | `[{at, duration, text, subtitle, style}]` - `lowerThird`, `center`, `topLeft`, `topCenter`, `bottomCenter` |
+| `deviceFrame` | `none`, `macWindow`, `browser` - chrome drawn around the screen |
+| `masks` | `[{rect, start, end, style, strength}]` - `mosaic` or `blur`, rect normalised to the source |
+| `motionBlur` | 0 off, 0.85 default, roughly a film shutter |
+
+Masks are in source coordinates, so a hidden region stays on the thing it hides
+while the camera zooms and pans. Window exclusion at capture time is still
+better where you know in advance.
