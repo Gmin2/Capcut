@@ -100,6 +100,9 @@ public final class Timeline: @unchecked Sendable {
     public var calloutTheme = CalloutTheme()
     public var deviceFrame: DeviceFrame = .none
     public var masks: [Mask] = []
+    /// 0 disables motion blur. 1 is roughly a 180-degree shutter, which is what
+    /// film looks like; above that reads as smeary.
+    public var motionBlur: Double = 0.85
     private var keyChips: [KeyChip] = []
 
     public func setKeys(_ keys: [EventRecorder.Key]) {
@@ -303,6 +306,7 @@ public final class Timeline: @unchecked Sendable {
             s.src = SIMD4(Float(c.origin.x), Float(c.origin.y),
                           Float(c.width), Float(c.height))
             applyMasks(to: &s, at: t)
+            applyMotion(to: &s, at: t, crop: c)
             screen = s
         }
         var f = FrameDescription(background: style.backgroundParams(outputSize: outputSize),
@@ -323,6 +327,28 @@ public final class Timeline: @unchecked Sendable {
     /// Packs up to four active masks into the layer's shader parameters.
     /// Four is a deliberate limit: more than that on one recording means the
     /// window should have been excluded at capture time instead.
+    /// Measures how far the crop moves in one frame and hands the shader a
+    /// direction to smear along. Derived from the crop rather than tracked as
+    /// state, so scrubbing backwards gives the identical frame.
+    private func applyMotion(to layer: inout LayerParams, at t: Double, crop: CGRect) {
+        guard motionBlur > 0.001 else { return }
+        let dt = 1.0 / 60.0
+        let prev = self.crop(at: max(0, t - dt))
+
+        // Both the pan and the scale change contribute: a zoom smears outward
+        // from the centre even when the camera is not panning.
+        let dx = crop.midX - prev.midX
+        let dy = crop.midY - prev.midY
+        let dScale = (crop.width - prev.width) / max(crop.width, 1)
+        let radial = dScale * crop.width * 0.5
+
+        let mag = hypot(dx, dy) + abs(radial)
+        guard mag > 0.35 else { return }   // still camera: leave it sharp
+
+        layer.motion = SIMD2(Float(dx + radial), Float(dy + radial * (crop.height / max(crop.width, 1))))
+        layer.motionScale = Float(motionBlur)
+    }
+
     private func applyMasks(to layer: inout LayerParams, at t: Double) {
         let active = masks.filter { t >= $0.start && t <= $0.end }.prefix(4)
         var rects = [SIMD4<Float>](repeating: SIMD4<Float>(), count: 4)

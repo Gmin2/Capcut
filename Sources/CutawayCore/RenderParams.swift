@@ -43,5 +43,10 @@ public struct LayerParams {
     public var mask3 = SIMD4<Float>()
     /// Per-mask strength; 0 means unused. Negative means blur, positive mosaic.
     public var maskStrength = SIMD4<Float>()
+    /// Camera velocity in source pixels per frame, used to smear along the
+    /// direction of travel. Zero when the camera is still.
+    public var motion = SIMD2<Float>()
+    public var motionScale: Float = 0
+    public var pad2: Float = 0
     public init() {}
 }

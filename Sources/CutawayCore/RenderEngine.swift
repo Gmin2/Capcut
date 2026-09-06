@@ -249,6 +249,9 @@ public final class RenderEngine {
         float4 mask2;
         float4 mask3;
         float4 maskStrength;
+        float2 motion;
+        float motionScale;
+        float pad2;
     };
 
     struct CursorParams {
@@ -334,7 +337,20 @@ public final class RenderEngine {
         }
 
         float3 c;
-        if (blurAmount > 0.0) {
+        if (P.motionScale > 0.001 && blurAmount <= 0.0) {
+            // Directional smear along the camera's travel. Real cameras
+            // integrate over the shutter interval; sampling a short line in
+            // source space is the cheap version of the same idea, and it takes
+            // the strobing off a fast zoom.
+            float3 acc = float3(0.0);
+            const int taps = 7;
+            for (int i = 0; i < taps; ++i) {
+                float f = (float(i) / float(taps - 1)) - 0.5;
+                float2 o = P.motion * f * P.motionScale;
+                acc += src.sample(smp, (sampleAt + o) / P.sourceSize).rgb;
+            }
+            c = acc / float(taps);
+        } else if (blurAmount > 0.0) {
             // Cheap box blur. Enough to destroy text, which is the job.
             float3 acc = float3(0.0);
             float total = 0.0;
