@@ -96,6 +96,7 @@ the edit change as you write it.
 | `scenes` | `{at, layout, transition}`; layouts are `talkingHead`, `demo`, `sideBySide`, `screenOnly` |
 | `zooms` | `{start, end, level, inDuration, outDuration, anchor, follow}` |
 | `segments` | kept spans `{sourceStart, sourceEnd, speed}`; omitted time is cut |
+| `trimStart` / `trimEnd` | top and tail, in source seconds; `trimEnd` omitted runs to the end |
 | `voiceover` | `{engine, voice, rate, lines: [{at, text}]}`, synthesised on device |
 | `cursor` | `{visible, scale, smoothing, clickRipple, rippleRadius}` |
 | `keycast` | `{visible, position, holdFor, mergeWindow, maxChips, fontSize}` |

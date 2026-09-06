@@ -111,6 +111,10 @@ public final class Timeline: @unchecked Sendable {
     public var clicks: [(t: Double, p: CGPoint)] = []
     /// Cuts and speed ramps. Effects stay in source time; this maps to output.
     public var timeMap = TimeMap(segments: [], sourceDuration: 0)
+    /// Kept only so the timeline strip can draw the handles; the renderer works
+    /// entirely from timeMap.
+    public var trimStart: Double = 0
+    public var trimEnd: Double = .greatestFiniteMagnitude
 
     /// Lightly smoothed pointer path, distinct from the camera's heavily damped
     /// focus track: the camera should lag, the pointer should not.

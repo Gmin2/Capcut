@@ -14,10 +14,13 @@ public final class TimelineView: NSView {
     /// moved without editing JSON.
     public var onMoveScene: ((Int, Double) -> Void)?
     public var onAddScene: ((Double) -> Void)?
+    /// Dragging either end of the recording. `isStart` distinguishes them.
+    public var onTrim: ((_ isStart: Bool, _ t: Double) -> Void)?
 
     private var thumbnails: [(t: Double, image: NSImage)] = []
     private var thumbnailTask: Task<Void, Never>?
     private var dragging: Int?
+    private var draggingTrim: Bool?
 
     public override var isFlipped: Bool { true }
 
@@ -122,6 +125,28 @@ public final class TimelineView: NSView {
             }
         }
 
+        // Trimmed material, dimmed rather than hidden so you can still see
+        // what you are cutting away and drag it back.
+        if let tl = timeline {
+            let lo = tl.trimStart
+            let hi = min(tl.trimEnd, duration)
+            NSColor(calibratedWhite: 0.03, alpha: 0.72).setFill()
+            if lo > 0 {
+                NSRect(x: track.minX, y: 0, width: x(lo) - track.minX,
+                       height: bounds.height).fill()
+            }
+            if hi < duration {
+                NSRect(x: x(hi), y: 0, width: track.maxX - x(hi),
+                       height: bounds.height).fill()
+            }
+
+            NSColor(calibratedRed: 0.95, green: 0.78, blue: 0.30, alpha: 1).setFill()
+            for (t, isStart) in [(lo, true), (hi, false)] {
+                let hx = isStart ? x(t) : x(t) - 4
+                NSRect(x: hx, y: 0, width: 4, height: bounds.height).fill()
+            }
+        }
+
         // playhead
         NSColor.white.setStroke()
         let ph = NSBezierPath()
@@ -159,6 +184,7 @@ public final class TimelineView: NSView {
 
     public override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if let isStart = trimHandle(near: p) { draggingTrim = isStart; return }
         if let i = sceneHandle(near: p) { dragging = i; return }
         // Double-click on the scenes lane adds a handover there.
         if event.clickCount == 2, isInSceneLane(p) {
@@ -171,6 +197,10 @@ public final class TimelineView: NSView {
 
     public override func mouseDragged(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if let isStart = draggingTrim {
+            onTrim?(isStart, time(at: p))
+            return
+        }
         if let i = dragging {
             onMoveScene?(i, time(at: p))
             return
@@ -178,7 +208,20 @@ public final class TimelineView: NSView {
         seek(event)
     }
 
-    public override func mouseUp(with event: NSEvent) { dragging = nil }
+    public override func mouseUp(with event: NSEvent) {
+        dragging = nil
+        draggingTrim = nil
+    }
+
+    /// Which end of the recording is under the pointer, if either. Checked
+    /// before scene markers because the handles sit at the extremes where a
+    /// scene marker never does.
+    private func trimHandle(near p: NSPoint) -> Bool? {
+        guard let tl = timeline, duration > 0 else { return nil }
+        if abs(trackX(tl.trimStart) - p.x) < 8 { return true }
+        if abs(trackX(min(tl.trimEnd, duration)) - p.x) < 8 { return false }
+        return nil
+    }
 
     public override func resetCursorRects() {
         super.resetCursorRects()
@@ -188,6 +231,10 @@ public final class TimelineView: NSView {
             let x = trackX(sc.at)
             addCursorRect(NSRect(x: x - 5, y: filmstripHeight + laneGap,
                                  width: 10, height: laneHeight),
+                          cursor: .resizeLeftRight)
+        }
+        for t in [tl.trimStart, min(tl.trimEnd, duration)] {
+            addCursorRect(NSRect(x: trackX(t) - 6, y: 0, width: 12, height: bounds.height),
                           cursor: .resizeLeftRight)
         }
     }

@@ -17,6 +17,11 @@ public struct Project: Codable {
     public var zooms: [Zoom] = []
     /// Kept spans of the recording. Empty means keep everything.
     public var segments: [Segment] = []
+    /// Top and tail. You always start recording before you are ready and stop
+    /// after you have finished, so this is the first edit anyone makes.
+    public var trimStart: Double = 0
+    /// nil runs to the end of the recording.
+    public var trimEnd: Double?
     public var cursor = CursorStyle()
     public var audio = AudioSettings()
     public var keycast = KeycastStyle()
@@ -62,6 +67,8 @@ public struct Project: Codable {
         scenes = get(.scenes, [])
         zooms = get(.zooms, [])
         segments = get(.segments, [])
+        trimStart = get(.trimStart, 0)
+        trimEnd = try? c.decode(Double.self, forKey: .trimEnd)
         cursor = get(.cursor, CursorStyle())
         audio = get(.audio, AudioSettings())
         keycast = get(.keycast, KeycastStyle())
@@ -151,6 +158,28 @@ public struct Project: Codable {
         return p
     }
 
+    /// Clips the kept spans to the trim range. Trim is expressed separately
+    /// from cuts so dragging the ends never rewrites the cut list, but by the
+    /// time it reaches the renderer it is all just segments.
+    func trimmedSegments(sourceDuration: Double) -> [Segment] {
+        let lo = max(0, trimStart)
+        let hi = min(trimEnd ?? sourceDuration, sourceDuration)
+        guard hi > lo else { return segments }
+
+        let base = segments.isEmpty
+            ? [Segment(sourceStart: 0, sourceEnd: sourceDuration)]
+            : segments
+        return base.compactMap { s in
+            let a = max(s.sourceStart, lo)
+            let b = min(s.sourceEnd, hi)
+            guard b > a + 0.01 else { return nil }
+            var out = s
+            out.sourceStart = a
+            out.sourceEnd = b
+            return out
+        }
+    }
+
     public func timeline(sourceSize: CGSize, events: Events,
                          sourceDuration: Double = 0) -> Timeline {
         let tl = Timeline(zooms: zooms, sourceSize: sourceSize, cursor: events.cursor)
@@ -165,7 +194,10 @@ public struct Project: Codable {
         tl.deviceFrame = deviceFrame
         tl.masks = masks
         tl.motionBlur = motionBlur
-        tl.timeMap = TimeMap(segments: segments, sourceDuration: sourceDuration)
+        tl.timeMap = TimeMap(segments: trimmedSegments(sourceDuration: sourceDuration),
+                             sourceDuration: sourceDuration)
+        tl.trimStart = trimStart
+        tl.trimEnd = trimEnd ?? sourceDuration
         return tl
     }
 }

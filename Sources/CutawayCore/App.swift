@@ -88,6 +88,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        timelineView.onTrim = { [weak self] isStart, t in
+            self?.editProject { p in
+                let end = p.trimEnd ?? self?.timelineView.duration ?? t
+                if isStart {
+                    p.trimStart = min(max(0, t), end - 0.5)
+                } else {
+                    p.trimEnd = max(t, p.trimStart + 0.5)
+                }
+            }
+        }
+
         timelineView.onAddScene = { [weak self] t in
             self?.editProject { p in
                 var scenes = p.scenes.sorted { $0.at < $1.at }
