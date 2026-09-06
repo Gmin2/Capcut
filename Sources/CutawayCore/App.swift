@@ -88,6 +88,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Up and down adjust the zoom level under the playhead: it is the one
+        // zoom property a horizontal timeline cannot express.
+        timelineView.onNudgeZoomLevel = { [weak self] step in
+            guard let self else { return }
+            let t = self.preview?.sourceTime ?? 0
+            self.editProject { p in
+                guard let i = p.zooms.firstIndex(where: { t >= $0.start && t <= $0.end })
+                else { return }
+                p.zooms[i].level = min(max(p.zooms[i].level + step, 1.1), 4.0)
+                Log.line(String(format: "zoom level %.1fx", p.zooms[i].level))
+            }
+        }
+
+        timelineView.onMoveZoom = { [weak self] index, edge, t in
+            self?.editProject { p in
+                guard index < p.zooms.count else { return }
+                var z = p.zooms[index]
+                let minLength = 0.4
+                switch edge {
+                case -1: z.start = min(max(0, t), z.end - minLength)
+                case 1:  z.end = max(t, z.start + minLength)
+                default:
+                    // Moving the whole block keeps its length.
+                    let length = z.end - z.start
+                    z.start = max(0, t)
+                    z.end = z.start + length
+                }
+                // Ramps cannot outlast the block, or the zoom never reaches
+                // its level before starting to come back out.
+                let half = (z.end - z.start) / 2
+                z.inDuration = min(z.inDuration, half)
+                z.outDuration = min(z.outDuration, half)
+                p.zooms[index] = z
+                p.zooms.sort { $0.start < $1.start }
+            }
+        }
+
+        timelineView.onAddZoom = { [weak self] t in
+            self?.editProject { p in
+                var z = Zoom(start: max(0, t - 0.6), end: t + 1.8, level: 2.0)
+                z.anchor = [0.5, 0.5]
+                p.zooms.append(z)
+                p.zooms.sort { $0.start < $1.start }
+            }
+        }
+
+        timelineView.onDeleteZoom = { [weak self] index in
+            self?.editProject { p in
+                guard index < p.zooms.count else { return }
+                p.zooms.remove(at: index)
+            }
+        }
+
         timelineView.onTrim = { [weak self] isStart, t in
             self?.editProject { p in
                 let end = p.trimEnd ?? self?.timelineView.duration ?? t

@@ -245,13 +245,22 @@ public final class Timeline: @unchecked Sendable {
     func level(at t: Double, zoom: Zoom) -> Double {
         let z = max(1.0, zoom.level)
         if t < zoom.start || t > zoom.end { return 1 }
-        if t < zoom.start + zoom.inDuration {
-            let p = CubicBezier.zoomIn.solve((t - zoom.start) / zoom.inDuration)
-            return exp(log(1.0) * (1 - p) + log(z) * p)
+
+        // Ramps are clamped to half the block each. Left alone they can overlap
+        // on a short zoom, and where they cross the level snaps instead of
+        // ramping. Clamped here rather than only in the editor, so a
+        // hand-written or generated project.json is protected too.
+        let span = max(zoom.end - zoom.start, 0.001)
+        let inDur = min(max(zoom.inDuration, 0.001), span / 2)
+        let outDur = min(max(zoom.outDuration, 0.001), span / 2)
+
+        if t < zoom.start + inDur {
+            let p = CubicBezier.zoomIn.solve((t - zoom.start) / inDur)
+            return exp(log(z) * p)
         }
-        if t > zoom.end - zoom.outDuration {
-            let p = CubicBezier.zoomOut.solve((zoom.end - t) / zoom.outDuration)
-            return exp(log(1.0) * (1 - p) + log(z) * p)
+        if t > zoom.end - outDur {
+            let p = CubicBezier.zoomOut.solve((zoom.end - t) / outDur)
+            return exp(log(z) * p)
         }
         return z
     }

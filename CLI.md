@@ -13,6 +13,22 @@ The window hides itself and a 3 second countdown runs before capture begins, so
 you have time to get to the right app. Put `0` in
 `~/Library/Application Support/Cutaway/countdown` to disable it.
 
+## Editing on the timeline
+
+| | |
+|---|---|
+| drag a zoom block | move it |
+| drag either end | change when it starts or stops |
+| double-click the zoom lane | add a zoom there |
+| alt-click a zoom | delete it |
+| up / down arrow | zoom level of the block under the playhead |
+| drag a scene marker | move the handover point |
+| double-click the scenes lane | add a scene change |
+| drag the yellow ends | trim the top and tail |
+
+Every one of these rewrites `project.json`, so a UI edit and a scripted edit are
+the same operation and neither can get out of step with the other.
+
 ## Keeping things out of shot
 
     cutaway windows                                  # find bundle ids

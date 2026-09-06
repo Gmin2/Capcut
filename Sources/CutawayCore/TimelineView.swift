@@ -16,13 +16,33 @@ public final class TimelineView: NSView {
     public var onAddScene: ((Double) -> Void)?
     /// Dragging either end of the recording. `isStart` distinguishes them.
     public var onTrim: ((_ isStart: Bool, _ t: Double) -> Void)?
+    /// Dragging a zoom block. `edge` is -1 for the left handle, 1 for the
+    /// right, 0 for the whole block.
+    public var onMoveZoom: ((_ index: Int, _ edge: Int, _ t: Double) -> Void)?
+    public var onAddZoom: ((Double) -> Void)?
+    public var onDeleteZoom: ((Int) -> Void)?
+    public var onNudgeZoomLevel: ((Double) -> Void)?
 
     private var thumbnails: [(t: Double, image: NSImage)] = []
     private var thumbnailTask: Task<Void, Never>?
     private var dragging: Int?
     private var draggingTrim: Bool?
+    /// Which zoom is being dragged, and by which edge.
+    private var draggingZoom: (index: Int, edge: Int)?
+    /// Where in the block the drag started, so moving a whole block does not
+    /// snap its start to the pointer.
+    private var zoomGrabOffset: Double = 0
 
     public override var isFlipped: Bool { true }
+    public override var acceptsFirstResponder: Bool { true }
+
+    public override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 126: onNudgeZoomLevel?(0.1)    // up
+        case 125: onNudgeZoomLevel?(-0.1)   // down
+        default: super.keyDown(with: event)
+        }
+    }
 
     private let laneHeight: CGFloat = 26
     private let laneGap: CGFloat = 6
@@ -143,12 +163,21 @@ public final class TimelineView: NSView {
             }
 
             // zoom lane
-            for z in tl.zooms {
+            for (i, z) in tl.zooms.enumerated() {
                 let r = NSRect(x: x(z.start), y: lanesTop + laneGap * 2 + laneHeight,
                                width: max(2, x(z.end) - x(z.start)), height: laneHeight)
-                NSColor(calibratedRed: 0.85, green: 0.42, blue: 0.24, alpha: 0.85).setFill()
+                let active = draggingZoom?.index == i
+                NSColor(calibratedRed: 0.85, green: 0.42, blue: 0.24,
+                        alpha: active ? 1.0 : 0.85).setFill()
                 NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 0),
                              xRadius: 4, yRadius: 4).fill()
+
+                // Edge grips, so it is obvious the ends can be dragged.
+                if r.width > 14 {
+                    NSColor(calibratedWhite: 1, alpha: 0.75).setFill()
+                    NSRect(x: r.minX + 2, y: r.minY + 5, width: 2, height: r.height - 10).fill()
+                    NSRect(x: r.maxX - 4, y: r.minY + 5, width: 2, height: r.height - 10).fill()
+                }
                 draw(String(format: "%.1fx", z.level), in: r)
             }
         }
@@ -214,6 +243,25 @@ public final class TimelineView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         if let isStart = trimHandle(near: p) { draggingTrim = isStart; return }
         if let i = sceneHandle(near: p) { dragging = i; return }
+
+        window?.makeFirstResponder(self)
+        if let hit = zoomHit(p) {
+            // Alt-click removes a zoom; it is the one destructive action here
+            // so it needs a modifier rather than a plain click.
+            if event.modifierFlags.contains(.option) {
+                onDeleteZoom?(hit.index)
+                return
+            }
+            draggingZoom = hit
+            if hit.edge == 0, let z = timeline?.zooms[hit.index] {
+                zoomGrabOffset = time(at: p) - z.start
+            }
+            return
+        }
+        if event.clickCount == 2, isInZoomLane(p) {
+            onAddZoom?(time(at: p))
+            return
+        }
         // Double-click on the scenes lane adds a handover there.
         if event.clickCount == 2, isInSceneLane(p) {
             onAddScene?(time(at: p))
@@ -229,6 +277,11 @@ public final class TimelineView: NSView {
             onTrim?(isStart, time(at: p))
             return
         }
+        if let z = draggingZoom {
+            onMoveZoom?(z.index, z.edge,
+                        z.edge == 0 ? time(at: p) - zoomGrabOffset : time(at: p))
+            return
+        }
         if let i = dragging {
             onMoveScene?(i, time(at: p))
             return
@@ -239,6 +292,7 @@ public final class TimelineView: NSView {
     public override func mouseUp(with event: NSEvent) {
         dragging = nil
         draggingTrim = nil
+        draggingZoom = nil
     }
 
     /// Which end of the recording is under the pointer, if either. Checked
@@ -265,6 +319,38 @@ public final class TimelineView: NSView {
             addCursorRect(NSRect(x: trackX(t) - 6, y: 0, width: 12, height: bounds.height),
                           cursor: .resizeLeftRight)
         }
+        for z in tl.zooms {
+            for t in [z.start, z.end] {
+                addCursorRect(NSRect(x: trackX(t) - 6, y: zoomLaneY,
+                                     width: 12, height: laneHeight),
+                              cursor: .resizeLeftRight)
+            }
+            let a = trackX(z.start), b = trackX(z.end)
+            if b - a > 18 {
+                addCursorRect(NSRect(x: a + 7, y: zoomLaneY,
+                                     width: b - a - 14, height: laneHeight),
+                              cursor: .openHand)
+            }
+        }
+    }
+
+    private var zoomLaneY: CGFloat { lanesTop + laneGap * 2 + laneHeight }
+
+    private func isInZoomLane(_ p: NSPoint) -> Bool {
+        p.y >= zoomLaneY && p.y <= zoomLaneY + laneHeight
+    }
+
+    /// Which zoom block is under the pointer, and whether the pointer is on an
+    /// edge. Edges win over the body so a narrow block can still be resized.
+    private func zoomHit(_ p: NSPoint) -> (index: Int, edge: Int)? {
+        guard let tl = timeline, isInZoomLane(p) else { return nil }
+        for (i, z) in tl.zooms.enumerated() {
+            let a = trackX(z.start), b = trackX(z.end)
+            if abs(a - p.x) < 7 { return (i, -1) }
+            if abs(b - p.x) < 7 { return (i, 1) }
+            if p.x > a && p.x < b { return (i, 0) }
+        }
+        return nil
     }
 
     private func isInSceneLane(_ p: NSPoint) -> Bool {
