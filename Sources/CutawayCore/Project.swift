@@ -103,6 +103,34 @@ public struct Project: Codable {
 
     /// First-open defaults, derived from what actually happened during the
     /// recording rather than from a template.
+    /// A project shaped like a pitch video: open on the face, hand over to the
+    /// screen, name and role on screen, zooms placed from the clicks. Written
+    /// as a starting point to edit, not as a finished result.
+    public static func makePitch(recordingDir: URL, manifest: Manifest,
+                                 name: String, role: String) -> Project {
+        var p = makeDefault(recordingDir: recordingDir, manifest: manifest)
+        let d = manifest.screen.duration
+        let handover = min(max(d * 0.28, 3), d - 2)
+
+        p.scenes = manifest.webcam != nil
+            ? [Scene(at: 0, layout: "talkingHead"),
+               Scene(at: handover, layout: "demo", transition: 0.8)]
+            : [Scene(at: 0, layout: "screenOnly")]
+
+        p.callouts = [
+            Callout(at: 0.8, text: name, subtitle: role,
+                    duration: min(4.0, max(2.5, handover - 1)), style: "lowerThird"),
+        ]
+        p.backgroundPreset = "midnight"
+        p.deviceFrame = .macWindow
+        p.notes = """
+            Pitch template. Edit freely; the app reloads this file as you save.
+            scenes: when the picture changes. zooms: source-time camera moves.
+            callouts: text on screen. voiceover: synthesised narration.
+            """
+        return p
+    }
+
     public static func makeDefault(recordingDir: URL, manifest: Manifest) -> Project {
         var p = Project()
         let screenSize = CGSize(width: manifest.screen.pixelSize[0],

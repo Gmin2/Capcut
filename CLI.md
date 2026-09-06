@@ -1,5 +1,24 @@
 # Driving Cutaway from a script
 
+## Start here
+
+    cutaway doctor
+
+Checks every permission and dependency and says how to fix whatever is missing.
+macOS permissions fail quietly - a denied grant looks exactly like an empty
+display list - so run this first whenever something silently does nothing.
+
+## Making a pitch video
+
+    cutaway record --seconds 60 --out ~/demos/pitch --keys
+    cutaway pitch --in ~/demos/pitch --name "Your Name" --role "Your Role"
+    cutaway export --in ~/demos/pitch --out ~/demos/pitch.mp4
+
+`pitch` writes a project.json shaped like a pitch video: webcam opening, handover
+to the screen, lower third, auto zooms from your clicks, device frame. Edit the
+file from there; the app reloads it as you save.
+
+
 Everything the app does is scriptable. The CLI is the same binary as the app, so
 it inherits the same screen-recording permission.
 

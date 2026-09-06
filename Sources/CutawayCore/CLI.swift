@@ -25,6 +25,8 @@ public enum CLI {
             case "describe": return try describe(args)
             case "still":    return try await still(args)
             case "snap":     return try await snap(args)
+            case "doctor":   return await doctor()
+            case "pitch":    return try pitch(args)
             case "pack":     return try pack(args)
             case "trim":     return try trim(args)
             case "voices":   return voices()
@@ -45,7 +47,7 @@ public enum CLI {
     static let childMarker = "--cutaway-child"
 
     static func needsAppLaunch(_ args: [String]) -> Bool {
-        ["record", "snap"].contains(args.first ?? "")
+        ["record", "snap", "doctor"].contains(args.first ?? "")
     }
 
     /// Runs this same bundle via `open`, waits, and forwards its output.
@@ -116,6 +118,15 @@ public enum CLI {
           still --at T[,T2,...] [--in DIR] [--out FILE] [--preset NAME]
               Renders composited frames to PNG. Much faster than an export
               when checking a layout or an overlay.
+
+          pitch --name "Your Name" --role "Your Role" [--in DIR]
+              Rewrites project.json as a pitch video: webcam opening, handover
+              to the screen, lower third, auto zooms, device frame.
+
+          doctor
+              Checks every permission and dependency, and says how to fix
+              whatever is missing. Start here when something silently does
+              nothing.
 
           pack [--in DIR] [--out FILE.cutaway]
               Wraps a recording into a single .cutaway document.
@@ -317,6 +328,45 @@ public enum CLI {
             ?? URL(fileURLWithPath: NSTemporaryDirectory() + "cutaway-snap.png")
         try await Snapshot.captureDisplay(to: out)
         emit(out.path)
+        return 0
+    }
+
+    static func pitch(_ args: [String]) throws -> Int32 {
+        let opts = Options(args)
+        let dir = opts.url("--in") ?? defaultDir
+        guard let m = Manifest.load(from: dir.appendingPathComponent("recording.json")) else {
+            FileHandle.standardError.write(Data("no recording in \(dir.path)\n".utf8))
+            return 1
+        }
+        let p = Project.makePitch(recordingDir: dir, manifest: m,
+                                  name: opts.value("--name") ?? "Your Name",
+                                  role: opts.value("--role") ?? "Engineer")
+        try p.write(to: dir)
+        Log.line("pitch template: \(p.scenes.count) scenes, \(p.zooms.count) zooms, "
+                 + "\(p.callouts.count) callouts")
+        emit(dir.appendingPathComponent(Project.filename).path)
+        return 0
+    }
+
+    static func doctor() async -> Int32 {
+        let checks = await Doctor.run()
+        var bad = 0
+        for c in checks {
+            let mark = c.ok ? "ok  " : "FAIL"
+            emit("\(mark)  \(c.name.padding(toLength: 20, withPad: " ", startingAt: 0))\(c.detail)")
+            if !c.ok { bad += 1 }
+        }
+        for c in checks where !c.ok {
+            if let fix = c.fix {
+                emit("")
+                emit("\(c.name):")
+                for line in fix.split(separator: "\n") {
+                    emit("  " + line.trimmingCharacters(in: .whitespaces))
+                }
+            }
+        }
+        emit("")
+        emit(bad == 0 ? "everything ready" : "\(bad) item(s) need attention")
         return 0
     }
 
