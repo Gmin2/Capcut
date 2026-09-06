@@ -2,9 +2,8 @@ import AppKit
 import Foundation
 import AVFoundation
 
-private let base = NSString(string: "~/coding/tools/video-editor/tmp/claude")
-    .expandingTildeInPath
-private var recordingDir: URL { URL(fileURLWithPath: base + "/recordings") }
+private var base: String { Paths.recordingsRoot.path }
+private var recordingDir: URL { Paths.currentRecording }
 private let outputSize = CGSize(width: 1920, height: 1080)
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

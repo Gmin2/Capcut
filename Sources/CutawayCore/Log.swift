@@ -4,8 +4,8 @@ public enum Log {
     /// Set by the UI so probe output lands in the window as well as stdout.
     nonisolated(unsafe) public static var sink: ((String) -> Void)?
 
-    public static let path = NSString(string: "~/coding/tools/video-editor/tmp/claude/probe.txt")
-        .expandingTildeInPath
+    public static let path = Paths.support
+        .appendingPathComponent("log.txt").path
 
     nonisolated(unsafe) private static var buffer = ""
     private static let lock = NSLock()

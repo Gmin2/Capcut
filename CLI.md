@@ -49,6 +49,21 @@ exist, so there is nothing to leak even if you share the raw file. `--only`
 captures a single app instead of the whole display. Both beat masking after the
 fact, which is only for what you did not think of in advance.
 
+## Where things live
+
+Recordings go in `~/Movies/Cutaway/`, with `Latest` as the working one that
+commands default to. Set `CUTAWAY_HOME` to put them somewhere else.
+
+## Tests
+
+    swift test
+
+28 tests over the pure decision logic: the time map, trim composition, zoom
+ramps, auto-zoom clustering, dead-air detection and project decoding. They run
+in about 5ms and need no permissions, camera or GPU, which is the point -- the
+alternative is exporting a video and measuring pixels, and that is slow enough
+that bugs survive.
+
 ## Start here
 
     cutaway doctor

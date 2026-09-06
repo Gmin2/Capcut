@@ -15,6 +15,11 @@ let package = Package(
             name: "CutawayCore",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .testTarget(
+            name: "CutawayCoreTests",
+            dependencies: ["CutawayCore"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "cutaway",
             // No link-time dependency on purpose: the host loads the library

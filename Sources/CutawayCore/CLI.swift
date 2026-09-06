@@ -502,8 +502,7 @@ public enum CLI {
     // MARK: helpers
 
     static var defaultDir: URL {
-        URL(fileURLWithPath: NSString(string: "~/coding/tools/video-editor/tmp/claude/recordings")
-            .expandingTildeInPath)
+        Paths.currentRecording
     }
 
     static func fmt(_ d: Double) -> String { String(format: "%.2f", d) }
