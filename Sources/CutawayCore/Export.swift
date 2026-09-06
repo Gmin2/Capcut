@@ -61,7 +61,17 @@ public enum Export {
                            outputSize: CGSize = CGSize(width: 1920, height: 1080),
                            fps: Int32 = 60,
                            timeline: Timeline? = nil,
+                           preset: ExportPreset? = nil,
                            to url: URL) async throws {
+        let preset = preset ?? ExportPreset(
+            name: "custom", size: outputSize, fps: fps,
+            codec: .hevc, bitrate: 12_000_000)
+        let outputSize = preset.size
+        let fps = preset.fps
+        // GIFs are produced by encoding a video first, then quantising it.
+        let videoTarget = preset.isGIF
+            ? url.deletingPathExtension().appendingPathExtension("gifsrc.mp4")
+            : url
         let manifest = Manifest.load(from: recordingDir.appendingPathComponent("recording.json"))
         let screenFile = manifest?.screen.file ?? "display.mov"
 
@@ -87,6 +97,9 @@ public enum Export {
         let tl = timeline ?? project.timeline(
             sourceSize: screen.size, events: Events.load(from: recordingDir),
             sourceDuration: duration)
+        if let override = preset.layoutOverride {
+            tl.layouts = Layout.named.merging(override) { _, new in new }
+        }
 
         // Narration is synthesised before the video loop so its length can
         // extend the export when a line runs past the last frame.
@@ -124,18 +137,18 @@ public enum Export {
         // Video first, audio muxed after. Feeding an audio input only once the
         // video is done makes AVAssetWriter stall waiting to interleave, so the
         // two are kept in separate passes.
-        let videoURL = mixURL == nil ? url
-            : url.deletingLastPathComponent()
-                 .appendingPathComponent("." + url.lastPathComponent + ".video.mp4")
-        try? FileManager.default.removeItem(at: url)
+        let videoURL = mixURL == nil ? videoTarget
+            : videoTarget.deletingLastPathComponent()
+                 .appendingPathComponent("." + videoTarget.lastPathComponent + ".video.mp4")
+        try? FileManager.default.removeItem(at: videoTarget)
         try? FileManager.default.removeItem(at: videoURL)
         let writer = try AVAssetWriter(outputURL: videoURL, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.hevc,
+            AVVideoCodecKey: preset.codec,
             AVVideoWidthKey: Int(outputSize.width),
             AVVideoHeightKey: Int(outputSize.height),
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: 12_000_000,
+                AVVideoAverageBitRateKey: preset.bitrate,
                 AVVideoExpectedSourceFrameRateKey: fps,
             ],
         ])
@@ -193,13 +206,19 @@ public enum Export {
         }
         await writer.finishWriting()
         if let mixURL {
-            try await mux(video: videoURL, audio: mixURL, to: url)
+            try await mux(video: videoURL, audio: mixURL, to: videoTarget)
             try? FileManager.default.removeItem(at: videoURL)
+        }
+
+        if preset.isGIF {
+            try await GIFEncoder.encode(video: videoTarget, to: url,
+                                        fps: fps, width: Int(outputSize.width))
+            try? FileManager.default.removeItem(at: videoTarget)
         }
 
         let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int) ?? 0
         Log.line("""
-          export: \(written)/\(total) frames \(Int(outputSize.width))x\(Int(outputSize.height)) \
+          export[\(preset.name)]: \(written)/\(total) frames \(Int(outputSize.width))x\(Int(outputSize.height)) \
           @\(fps) in \(String(format: "%.1f", Date().timeIntervalSince(started)))s, \
           \(String(format: "%.1f", Double(size) / 1_048_576)) MB, \
           webcam=\(webcam != nil ? "yes" : "no"), \

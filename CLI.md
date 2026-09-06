@@ -8,7 +8,24 @@ cutaway record --seconds 30 --out ~/demos/pitch
 cutaway describe --in ~/demos/pitch
 # edit ~/demos/pitch/project.json
 cutaway export --in ~/demos/pitch --out ~/demos/pitch.mp4
+cutaway export --in ~/demos/pitch --preset vertical --out ~/demos/reel.mp4
+cutaway export --in ~/demos/pitch --all --out ~/demos/pitch.mp4
 ```
+
+## Presets
+
+| name | |
+|---|---|
+| `1080p` | 1920x1080 HEVC, the default |
+| `4k` | 3840x2160 HEVC |
+| `h264` | 1920x1080 H.264, for anything that will not take HEVC |
+| `vertical` | 1080x1920, reframed for portrait |
+| `square` | 1080x1080 |
+| `gif` | 960x540 at 15fps, two-pass palette |
+
+Vertical and square do not letterbox: they carry their own layouts, so the
+screen fills the width and the camera sits below it rather than both shrinking.
+`--all` writes every preset next to the output path.
 
 `~/.local/bin/cutaway` is symlinked on every build. Put that on your PATH.
 

@@ -88,6 +88,9 @@ public final class Timeline: @unchecked Sendable {
     public var scenes: [Scene] = [Scene(at: 0, layout: "screenOnly")]
     public var style: Style = .default
     public var cursorStyle = CursorStyle()
+    /// Per-export layout table. Vertical and square output reframe everything,
+    /// so the scene names stay the same and only their geometry changes.
+    public var layouts: [String: Layout] = Layout.named
     public var clicks: [(t: Double, p: CGPoint)] = []
     /// Cuts and speed ramps. Effects stay in source time; this maps to output.
     public var timeMap = TimeMap(segments: [], sourceDuration: 0)
@@ -243,7 +246,7 @@ public final class Timeline: @unchecked Sendable {
         let current = ordered[currentIndex]
 
         func resolve(_ name: String) -> (LayerParams?, LayerParams?) {
-            let l = Layout.named[name] ?? .screenOnly
+            let l = layouts[name] ?? Layout.named[name] ?? .screenOnly
             let s = l.screen?.layerParams(sourceSize: screenSize, outputSize: outputSize)
             let w = webcamSize.flatMap { size in
                 l.webcam?.layerParams(sourceSize: size, outputSize: outputSize)

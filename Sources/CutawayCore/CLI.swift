@@ -92,8 +92,11 @@ public enum CLI {
               Records the screen, then writes display.mov, events.json,
               recording.json, transcript.json and a default project.json.
 
-          export [--in DIR] [--out FILE] [--width N] [--height N] [--fps N]
+          export [--in DIR] [--out FILE] [--preset NAME] [--all]
+                 [--width N] [--height N] [--fps N]
               Renders the edit described by project.json.
+              Presets: 1080p, 4k, h264, vertical, square, gif.
+              --all writes every preset next to the output file.
 
           describe [--in DIR] [--json]
               Prints what is in a recording: duration, tracks, clicks, cuts,
@@ -139,11 +142,45 @@ public enum CLI {
         let opts = Options(args)
         let dir = opts.url("--in") ?? defaultDir
         let out = opts.url("--out") ?? dir.appendingPathComponent("export.mp4")
-        let size = CGSize(width: opts.double("--width") ?? 1920,
-                          height: opts.double("--height") ?? 1080)
-        try await Export.run(recordingDir: dir, outputSize: size,
-                             fps: Int32(opts.double("--fps") ?? 60), to: out)
-        emit(out.path)
+
+        if opts.flag("--all") {
+            for name in ExportPreset.allNames {
+                guard var p = ExportPreset.named[name] else { continue }
+                if let w = opts.double("--fps") { p.fps = Int32(w) }
+                let ext = p.isGIF ? "gif" : "mp4"
+                let target = out.deletingPathExtension()
+                    .appendingPathExtension("\(p.name).\(ext)")
+                try await Export.run(recordingDir: dir, preset: p, to: target)
+                emit(target.path)
+            }
+            return 0
+        }
+
+        var preset: ExportPreset
+        if let name = opts.value("--preset") {
+            guard let p = ExportPreset.named[name.lowercased()] else {
+                FileHandle.standardError.write(Data(
+                    "unknown preset: \(name). try: \(ExportPreset.allNames.joined(separator: ", "))\n".utf8))
+                return 1
+            }
+            preset = p
+        } else {
+            preset = ExportPreset(
+                name: "custom",
+                size: CGSize(width: opts.double("--width") ?? 1920,
+                             height: opts.double("--height") ?? 1080),
+                fps: 60, codec: .hevc, bitrate: 12_000_000)
+        }
+        if let f = opts.double("--fps") { preset.fps = Int32(f) }
+
+        // Keep the extension honest: a GIF written to .mp4 confuses everything
+        // downstream.
+        var target = out
+        if preset.isGIF, out.pathExtension.lowercased() != "gif" {
+            target = out.deletingPathExtension().appendingPathExtension("gif")
+        }
+        try await Export.run(recordingDir: dir, preset: preset, to: target)
+        emit(target.path)
         return 0
     }
 
