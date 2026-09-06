@@ -242,7 +242,8 @@ public final class RenderEngine {
         float opacity;
         float borderWidth;
         float circle;
-        float pad1; float pad2;
+        float frameBar;
+        float frameKind;
     };
 
     struct CursorParams {
@@ -302,9 +303,55 @@ public final class RenderEngine {
         float aOut = aPlate + aShadow * (1.0 - aPlate);
         if (aOut < 0.002) { discard_fragment(); }
 
-        float2 local = (p - P.dst.xy) / P.dst.zw;
+        // With chrome, the video occupies the plate below the bar.
+        float2 contentOrigin = P.dst.xy + float2(0.0, P.frameBar);
+        float2 contentSize = P.dst.zw - float2(0.0, P.frameBar);
+        float2 local = (p - contentOrigin) / max(contentSize, float2(1.0));
         float2 srcPx = P.src.xy + local * P.src.zw;
         float3 c = src.sample(smp, srcPx / P.sourceSize).rgb;
+
+        if (P.frameBar > 0.5) {
+            float yInBar = p.y - P.dst.y;
+            if (yInBar < P.frameBar) {
+                // Faint vertical gradient, the way real title bars are lit.
+                float g = yInBar / P.frameBar;
+                float3 bar = P.frameKind > 1.5
+                    ? mix(float3(0.161, 0.173, 0.192), float3(0.129, 0.141, 0.157), g)
+                    : mix(float3(0.231, 0.239, 0.255), float3(0.184, 0.192, 0.208), g);
+                c = bar;
+
+                // Traffic lights, sized and spaced off the bar height so they
+                // stay proportional at any zoom.
+                float r = P.frameBar * 0.175;
+                float cy = P.dst.y + P.frameBar * 0.5;
+                float x0 = P.dst.x + P.frameBar * 0.62;
+                float gap = P.frameBar * 0.56;
+                float3 lights[3] = {
+                    float3(0.996, 0.373, 0.345),
+                    float3(0.996, 0.741, 0.176),
+                    float3(0.157, 0.784, 0.251)
+                };
+                for (int i = 0; i < 3; ++i) {
+                    float d = length(p - float2(x0 + gap * float(i), cy));
+                    c = mix(c, lights[i], 1.0 - smoothstep(r - 1.0, r + 0.5, d));
+                }
+
+                if (P.frameKind > 1.5) {
+                    // Address pill: a rounded bar centred in the chrome.
+                    float pillH = P.frameBar * 0.52;
+                    float2 pillC = float2(P.dst.x + P.dst.z * 0.5, cy);
+                    float2 pillHalf = float2(P.dst.z * 0.32, pillH * 0.5);
+                    float pd = sdRoundBox(p - pillC, pillHalf, pillH * 0.5);
+                    c = mix(c, float3(0.086, 0.094, 0.11),
+                            1.0 - smoothstep(-1.0, 0.5, pd));
+                }
+
+                // Hairline under the bar, which is what sells it as chrome
+                // rather than a coloured rectangle.
+                float edge = P.frameBar - yInBar;
+                c = mix(c, float3(0.0), 0.35 * (1.0 - smoothstep(0.0, 1.5, edge)));
+            }
+        }
 
         if (P.borderWidth > 0.0) {
             float band = smoothstep(-P.borderWidth, 0.0, sd) * (1.0 - smoothstep(0.0, 1.5, sd));

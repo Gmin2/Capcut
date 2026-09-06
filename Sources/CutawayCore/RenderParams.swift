@@ -32,7 +32,9 @@ public struct LayerParams {
     public var borderWidth: Float = 0
     /// 1 makes the corner radius half the shorter side, giving a circle.
     public var circle: Float = 0
-    public var pad1: Float = 0
-    public var pad2: Float = 0
+    /// Height of the chrome bar in output pixels; 0 for no frame.
+    public var frameBar: Float = 0
+    /// 0 none, 1 macOS window, 2 browser.
+    public var frameKind: Float = 0
     public init() {}
 }

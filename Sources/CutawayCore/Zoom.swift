@@ -98,6 +98,7 @@ public final class Timeline: @unchecked Sendable {
     public var keycastStyle = KeycastStyle()
     public var callouts: [Callout] = []
     public var calloutTheme = CalloutTheme()
+    public var deviceFrame: DeviceFrame = .none
     private var keyChips: [KeyChip] = []
 
     public func setKeys(_ keys: [EventRecorder.Key]) {
@@ -259,7 +260,9 @@ public final class Timeline: @unchecked Sendable {
 
         func resolve(_ name: String) -> (LayerParams?, LayerParams?) {
             let l = layouts[name] ?? Layout.named[name] ?? .screenOnly
-            let s = l.screen?.layerParams(sourceSize: screenSize, outputSize: outputSize)
+            var placement = l.screen
+            if deviceFrame != .none { placement?.frame = deviceFrame }
+            let s = placement?.layerParams(sourceSize: screenSize, outputSize: outputSize)
             let w = webcamSize.flatMap { size in
                 l.webcam?.layerParams(sourceSize: size, outputSize: outputSize)
             }

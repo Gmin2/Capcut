@@ -4,6 +4,13 @@ import simd
 
 /// Where one source sits on the canvas. Rects are normalised to the output so
 /// a layout is resolution independent.
+/// Chrome drawn around a layer: nothing, a macOS title bar with traffic
+/// lights, or a browser bar with an address pill. Drawn in the shader rather
+/// than as a bitmap so it stays sharp at any zoom and any output size.
+public enum DeviceFrame: String, Codable {
+    case none, macWindow, browser
+}
+
 public struct Placement: Codable {
     /// x, y, w, h in 0...1 of the output frame.
     public var rect: [Double]
@@ -18,6 +25,9 @@ public struct Placement: Codable {
     public var shadowOffsetY: Double = 26
     public var borderWidth: Double = 1.5
     public var borderColor: String = "#FFFFFF26"
+    public var frame: DeviceFrame = .none
+    /// Title bar height in output pixels at 1080p, scaled with the output.
+    public var frameBarHeight: Double = 34
 
     public init(rect: [Double], fit: String = "contain", circle: Bool = false,
                 cornerRadius: Double = 18, opacity: Double = 1) {
@@ -129,6 +139,15 @@ extension Placement {
         p.shadowOffset = SIMD2(0, Float(shadowOffsetY))
         p.borderWidth = Float(borderWidth)
         p.borderColor = Style.rgba(borderColor)
+
+        if frame != .none {
+            // The bar sits above the content, so the plate grows upward and the
+            // video itself is not squashed.
+            let bar = Float(frameBarHeight) * Float(outputSize.height / 1080)
+            p.dst = SIMD4(p.dst.x, p.dst.y - bar, p.dst.z, p.dst.w + bar)
+            p.frameBar = bar
+            p.frameKind = frame == .macWindow ? 1 : 2
+        }
         return p
     }
 

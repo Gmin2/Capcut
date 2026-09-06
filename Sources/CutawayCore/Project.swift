@@ -22,6 +22,8 @@ public struct Project: Codable {
     public var keycast = KeycastStyle()
     public var callouts: [Callout] = []
     public var calloutTheme = CalloutTheme()
+    /// "none", "macWindow" or "browser", drawn around the screen layer.
+    public var deviceFrame: DeviceFrame = .none
     public var voiceover: Voiceover?
 
     public struct Output: Codable {
@@ -53,6 +55,7 @@ public struct Project: Codable {
         keycast = get(.keycast, KeycastStyle())
         callouts = get(.callouts, [])
         calloutTheme = get(.calloutTheme, CalloutTheme())
+        deviceFrame = get(.deviceFrame, DeviceFrame.none)
         voiceover = try? c.decode(Voiceover.self, forKey: .voiceover)
     }
 
@@ -116,6 +119,7 @@ public struct Project: Codable {
         tl.setKeys(events.keys)
         tl.callouts = callouts
         tl.calloutTheme = calloutTheme
+        tl.deviceFrame = deviceFrame
         tl.timeMap = TimeMap(segments: segments, sourceDuration: sourceDuration)
         return tl
     }
