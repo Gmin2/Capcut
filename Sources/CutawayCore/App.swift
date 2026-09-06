@@ -137,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             previewBox.heightAnchor.constraint(equalTo: previewBox.widthAnchor,
                                                multiplier: 9.0 / 16.0),
             timelineView.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
-            timelineView.heightAnchor.constraint(equalToConstant: 108),
+            timelineView.heightAnchor.constraint(equalToConstant: 132),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 110),
         ])
@@ -243,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timelineView.timeline = tl
         timelineView.loadThumbnails(
             from: recordingDir.appendingPathComponent(m.screen.file))
+        timelineView.loadWaveform(from: recordingDir, manifest: m)
         timelineView.window?.invalidateCursorRects(for: timelineView)
         preview?.load(recordingDir: recordingDir, outputSize: outputSize,
                       timeline: tl, screenSize: screenSize, webcamSize: webcamSize)
@@ -419,6 +420,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Give the preview a moment to load and draw a real frame.
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
                 Task {
+                    // Bring the window forward first, or the snapshot is
+                    // whatever happens to be in front of it.
+                    await MainActor.run {
+                        self.window.makeKeyAndOrderFront(nil)
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    try? await Task.sleep(nanoseconds: 500_000_000)
                     self.preview?.seek(to: 3.0)
                     try? await Task.sleep(nanoseconds: 700_000_000)
                     do {

@@ -28,6 +28,16 @@ public final class TimelineView: NSView {
     private let laneGap: CGFloat = 6
     private let labelInset: CGFloat = 54
     private let filmstripHeight: CGFloat = 34
+    private let waveHeight: CGFloat = 22
+    private var peaks: [Float] = []
+    /// Where the audio starts relative to the screen recording.
+    private var waveOffset: Double = 0
+    private var waveDuration: Double = 0
+
+    /// Top of the scene and zoom lanes, which moves when there is a waveform.
+    private var lanesTop: CGFloat {
+        filmstripHeight + (peaks.isEmpty ? 0 : waveHeight)
+    }
 
     public override func draw(_ dirty: NSRect) {
         guard duration > 0 else { return }
@@ -91,15 +101,33 @@ public final class TimelineView: NSView {
                    width: track.width, height: 1).fill()
         }
 
-        drawLabel("scenes", y: filmstripHeight + laneGap)
-        drawLabel("zoom", y: filmstripHeight + laneGap * 2 + laneHeight)
+        // Waveform under the filmstrip: speech shows up as clusters, which is
+        // how you find the sentence you meant.
+        if !peaks.isEmpty, waveDuration > 0 {
+            let top = filmstripHeight
+            NSColor(calibratedWhite: 0.09, alpha: 1).setFill()
+            NSRect(x: track.minX, y: top, width: track.width, height: waveHeight).fill()
+
+            NSColor(calibratedRed: 0.40, green: 0.72, blue: 0.94, alpha: 0.9).setFill()
+            let mid = top + waveHeight / 2
+            for (i, v) in peaks.enumerated() {
+                let t = waveOffset + waveDuration * Double(i) / Double(peaks.count)
+                guard t >= 0, t <= duration else { continue }
+                let h = max(1, CGFloat(v) * (waveHeight - 3))
+                NSRect(x: x(t), y: mid - h / 2, width: 1, height: h).fill()
+            }
+            drawLabel("audio", y: top - 1)
+        }
+
+        drawLabel("scenes", y: lanesTop + laneGap)
+        drawLabel("zoom", y: lanesTop + laneGap * 2 + laneHeight)
 
         // scenes lane
         if let tl = timeline {
             let scenes = tl.scenes.sorted { $0.at < $1.at }
             for (i, sc) in scenes.enumerated() {
                 let end = i + 1 < scenes.count ? scenes[i + 1].at : duration
-                let r = NSRect(x: x(sc.at), y: filmstripHeight + laneGap,
+                let r = NSRect(x: x(sc.at), y: lanesTop + laneGap,
                                width: max(2, x(end) - x(sc.at)), height: laneHeight)
                 colour(for: sc.layout).setFill()
                 NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 0),
@@ -116,7 +144,7 @@ public final class TimelineView: NSView {
 
             // zoom lane
             for z in tl.zooms {
-                let r = NSRect(x: x(z.start), y: filmstripHeight + laneGap * 2 + laneHeight,
+                let r = NSRect(x: x(z.start), y: lanesTop + laneGap * 2 + laneHeight,
                                width: max(2, x(z.end) - x(z.start)), height: laneHeight)
                 NSColor(calibratedRed: 0.85, green: 0.42, blue: 0.24, alpha: 0.85).setFill()
                 NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 0),
@@ -229,7 +257,7 @@ public final class TimelineView: NSView {
         let scenes = tl.scenes.sorted { $0.at < $1.at }
         for (i, sc) in scenes.enumerated() where i > 0 {
             let x = trackX(sc.at)
-            addCursorRect(NSRect(x: x - 5, y: filmstripHeight + laneGap,
+            addCursorRect(NSRect(x: x - 5, y: lanesTop + laneGap,
                                  width: 10, height: laneHeight),
                           cursor: .resizeLeftRight)
         }
@@ -240,7 +268,7 @@ public final class TimelineView: NSView {
     }
 
     private func isInSceneLane(_ p: NSPoint) -> Bool {
-        p.y >= filmstripHeight + laneGap && p.y <= filmstripHeight + laneGap + laneHeight
+        p.y >= lanesTop + laneGap && p.y <= lanesTop + laneGap + laneHeight
     }
 
     private func trackX(_ t: Double) -> CGFloat {
@@ -264,6 +292,26 @@ public final class TimelineView: NSView {
 
     /// Decodes a handful of frames in the background. Cheap enough to redo on
     /// load, and it makes finding a moment far quicker than scrubbing.
+    /// Decodes the audio envelope in the background. Never blocks first paint.
+    public func loadWaveform(from dir: URL, manifest: Manifest?) {
+        peaks = []
+        guard let track = Waveform.preferredTrack(in: dir, manifest: manifest) else {
+            needsDisplay = true
+            return
+        }
+        waveOffset = manifest?.mic?.offset ?? 0
+        Task { [weak self] in
+            let asset = AVURLAsset(url: track)
+            let dur = (try? await asset.load(.duration)).map { CMTimeGetSeconds($0) } ?? 0
+            let p = await Waveform.peaks(from: track)
+            await MainActor.run {
+                self?.peaks = p
+                self?.waveDuration = dur
+                self?.needsDisplay = true
+            }
+        }
+    }
+
     public func loadThumbnails(from url: URL, count: Int = 12) {
         thumbnailTask?.cancel()
         thumbnails = []
