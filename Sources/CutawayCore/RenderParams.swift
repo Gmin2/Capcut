@@ -8,8 +8,18 @@ public struct BackgroundParams {
     public var bg0 = SIMD4<Float>()
     public var bg1 = SIMD4<Float>()
     public var outputSize = SIMD2<Float>()
+    public var sourceSize = SIMD2<Float>()
     public var angle: Float = 0
-    public var pad0: Float = 0
+    /// 0 gradient, 1 solid, 2 blurred source, 3 image.
+    public var kind: Float = 0
+    /// Grain amount, 0 to about 0.06. A little noise stops a wide gradient
+    /// banding on an 8-bit encode.
+    public var grain: Float = 0
+    /// How far the blurred backdrop is zoomed past the frame, so its edges are
+    /// never visible.
+    public var blurZoom: Float = 1.25
+    public var dim: Float = 0
+    public var pad1: Float = 0
     public init() {}
 }
 

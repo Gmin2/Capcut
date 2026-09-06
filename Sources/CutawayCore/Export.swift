@@ -133,6 +133,7 @@ public enum Export {
         let state = RenderState(screenSize: screen.size, webcamSize: webcam?.size,
                                 outputSize: outputSize, timeline: tl)
         let engine = try RenderEngine()
+        engine.loadBackgroundImage(path: tl.style.background.image)
 
         // Video first, audio muxed after. Feeding an audio input only once the
         // video is done makes AVAssetWriter stall waiting to interleave, so the

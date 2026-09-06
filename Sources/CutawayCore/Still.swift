@@ -48,6 +48,7 @@ public enum Still {
         let f = state.evaluate(atSourceTime: seconds)
 
         let engine = try RenderEngine()
+        engine.loadBackgroundImage(path: tl.style.background.image)
         var layers: [RenderEngine.Draw] = []
         if let sp = f.screen {
             layers.append(.init(texture: try engine.makeTexture(from: screenImage), params: sp))

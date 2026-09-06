@@ -27,6 +27,9 @@ public struct Project: Codable {
     public var masks: [Mask] = []
     /// 0 off, 1 is roughly a film shutter.
     public var motionBlur: Double = 0.85
+    /// Shorthand for style.background. Names: midnight, slate, ember, forest,
+    /// paper, ink, screen.
+    public var backgroundPreset: String?
     public var voiceover: Voiceover?
 
     public struct Output: Codable {
@@ -50,6 +53,12 @@ public struct Project: Codable {
         notes = try? c.decode(String.self, forKey: .notes)
         output = get(.output, Output())
         style = get(.style, Style.default)
+        // A preset name is shorthand for a whole background block, so a
+        // project can say "screen" instead of spelling out five fields.
+        if let preset = try? c.decode(String.self, forKey: .backgroundPreset),
+           let g = Style.presets[preset] {
+            style.background = g
+        }
         scenes = get(.scenes, [])
         zooms = get(.zooms, [])
         segments = get(.segments, [])
@@ -61,6 +70,7 @@ public struct Project: Codable {
         deviceFrame = get(.deviceFrame, DeviceFrame.none)
         masks = get(.masks, [])
         motionBlur = get(.motionBlur, 0.85)
+        backgroundPreset = try? c.decode(String.self, forKey: .backgroundPreset)
         voiceover = try? c.decode(Voiceover.self, forKey: .voiceover)
     }
 

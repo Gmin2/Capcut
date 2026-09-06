@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import MetalKit
+import AppKit
 import CoreGraphics
 import CoreVideo
 
@@ -17,6 +18,22 @@ public final class RenderEngine {
     private var cursorTexture: MTLTexture?
     private var keycastCache: (text: String, height: Int, texture: MTLTexture)?
     private var calloutCache: (id: String, texture: MTLTexture)?
+    /// Set when the background needs its own image. A blurred backdrop uses the
+    /// screen layer's texture instead, which costs nothing extra.
+    public var backgroundTexture: MTLTexture?
+    private var backgroundImagePath: String?
+
+    public func loadBackgroundImage(path: String?) {
+        guard backgroundImagePath != path else { return }
+        backgroundImagePath = path
+        guard let path, let img = NSImage(contentsOfFile:
+                NSString(string: path).expandingTildeInPath),
+              let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            backgroundTexture = nil
+            return
+        }
+        backgroundTexture = try? makeTexture(from: cg)
+    }
     private var textureCache: CVMetalTextureCache!
 
     public struct Draw {
@@ -150,6 +167,9 @@ public final class RenderEngine {
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return false }
         var bg = background
         enc.setRenderPipelineState(backgroundPipeline)
+        // A blurred or image backdrop samples a texture; the gradient path
+        // ignores it, but Metal still needs something bound.
+        enc.setFragmentTexture(backgroundTexture ?? layers.first?.texture, index: 0)
         enc.setFragmentBytes(&bg, length: MemoryLayout<BackgroundParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
@@ -224,8 +244,13 @@ public final class RenderEngine {
         float4 bg0;
         float4 bg1;
         float2 outputSize;
+        float2 sourceSize;
         float angle;
-        float pad0;
+        float kind;
+        float grain;
+        float blurZoom;
+        float dim;
+        float pad1;
     };
 
     struct LayerParams {
@@ -281,12 +306,55 @@ public final class RenderEngine {
         return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
     }
 
+    // Cheap hash noise. Deterministic per pixel, so the grain does not crawl
+    // between frames the way a time-seeded random would.
+    static float hash21(float2 p) {
+        p = fract(p * float2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+    }
+
     fragment float4 cutaway_background(VOut in [[stage_in]],
+                                       texture2d<float> src [[texture(0)]],
                                        constant BackgroundParams& P [[buffer(0)]]) {
-        float a = P.angle * 3.14159265 / 180.0;
-        float2 dir = float2(cos(a), sin(a));
-        float t = clamp(dot(in.uv - 0.5, dir) + 0.5, 0.0, 1.0);
-        return float4(mix(P.bg0.rgb, P.bg1.rgb, t), 1.0);
+        constexpr sampler smp(filter::linear, address::clamp_to_edge);
+        float3 col;
+
+        if (P.kind > 1.5 && P.kind < 2.5) {
+            // The recording itself, blurred and pushed past the frame edges so
+            // the backdrop always belongs to the shot.
+            float2 uv = (in.uv - 0.5) / P.blurZoom + 0.5;
+            float3 acc = float3(0.0);
+            float total = 0.0;
+            float r = 0.018;
+            for (int y = -3; y <= 3; ++y) {
+                for (int x = -3; x <= 3; ++x) {
+                    float2 o = float2(float(x), float(y)) * r / 3.0;
+                    float w = 1.0 - length(float2(float(x), float(y))) / 5.0;
+                    if (w <= 0.0) { continue; }
+                    acc += src.sample(smp, uv + o).rgb * w;
+                    total += w;
+                }
+            }
+            col = acc / max(total, 0.0001);
+            col *= (1.0 - P.dim);
+        } else if (P.kind > 2.5) {
+            // A supplied image, covering the frame.
+            col = src.sample(smp, in.uv).rgb * (1.0 - P.dim);
+        } else if (P.kind > 0.5) {
+            col = P.bg0.rgb;
+        } else {
+            float a = P.angle * 3.14159265 / 180.0;
+            float2 dir = float2(cos(a), sin(a));
+            float t = clamp(dot(in.uv - 0.5, dir) + 0.5, 0.0, 1.0);
+            col = mix(P.bg0.rgb, P.bg1.rgb, t);
+        }
+
+        if (P.grain > 0.0001) {
+            float n = hash21(in.uv * P.outputSize) - 0.5;
+            col += n * P.grain;
+        }
+        return float4(col, 1.0);
     }
 
     fragment float4 cutaway_layer(VOut in [[stage_in]],

@@ -99,3 +99,22 @@ event and the letter is not.
 Masks are in source coordinates, so a hidden region stays on the thing it hides
 while the camera zooms and pans. Window exclusion at capture time is still
 better where you know in advance.
+
+## Backgrounds
+
+`backgroundPreset` is shorthand for the whole `style.background` block:
+
+| preset | |
+|---|---|
+| `midnight` | purple to near-black, the default |
+| `slate` | neutral grey-blue |
+| `ember` | warm red to black |
+| `forest` | deep teal |
+| `paper` | light, with grain |
+| `ink` | flat near-black |
+| `screen` | the recording itself, blurred and dimmed behind the plate |
+
+`screen` is worth knowing about: the backdrop is taken from the footage, so it
+always matches the shot. For anything else, set `style.background` directly with
+`kind` (`gradient`, `solid`, `blurredScreen`, `image`), `from`, `to`, `angle`,
+`grain` and `dim`. `kind: "image"` reads `style.background.image` as a path.

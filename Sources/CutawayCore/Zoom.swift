@@ -309,7 +309,8 @@ public final class Timeline: @unchecked Sendable {
             applyMotion(to: &s, at: t, crop: c)
             screen = s
         }
-        var f = FrameDescription(background: style.backgroundParams(outputSize: outputSize),
+        var f = FrameDescription(background: style.backgroundParams(outputSize: outputSize,
+                                                                   sourceSize: sourceSize),
                                  screen: screen, webcam: webcam,
                                  cursor: cursorParams(at: t, screen: screen,
                                                       outputSize: outputSize))
