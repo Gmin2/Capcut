@@ -12,6 +12,10 @@ while pgrep -f 'Cutaway.app/Contents/MacOS/cutaway' >/dev/null; do sleep 0.2; do
 
 mkdir -p tmp/claude
 rm -f tmp/claude/probe.txt
+# -n spawns a new instance every time; without this the old ones pile up,
+# keep stale dylibs loaded, and write to the same log.
+pkill -9 -f 'Cutaway.app/Contents/MacOS/cutaway' 2>/dev/null || true
+while pgrep -f 'Cutaway.app/Contents/MacOS/cutaway' >/dev/null; do sleep 0.1; done
 open -n build/Cutaway.app
 
 echo "launched  (cdhash $(codesign -d --verbose=4 build/Cutaway.app 2>&1 | awk -F= '/^CDHash/{print substr($2,1,12)}'))"

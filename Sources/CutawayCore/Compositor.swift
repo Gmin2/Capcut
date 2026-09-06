@@ -12,18 +12,39 @@ public extension RenderEngine {
               let tex = keycastTexture(text: k.text, size: k.rect.size,
                                        style: style, outputHeight: outputSize.height)
         else { return nil }
+        return Draw(texture: tex, params: overlayParams(rect: k.rect,
+                                                        opacity: k.opacity,
+                                                        outputSize: outputSize))
+    }
+}
+
+public extension RenderEngine {
+    func calloutDraw(_ f: FrameDescription, theme: CalloutTheme,
+                     outputSize: CGSize) -> Draw? {
+        guard let c = f.callout, c.opacity > 0.01,
+              let tex = calloutTexture(c.callout, id: c.id, size: c.rect.size,
+                                       theme: theme, outputHeight: outputSize.height)
+        else { return nil }
+        return Draw(texture: tex, params: overlayParams(rect: c.rect,
+                                                        opacity: c.opacity,
+                                                        outputSize: outputSize))
+    }
+
+    /// Shared placement for anything already drawn as a finished bitmap: the
+    /// rounding, border and shadow are baked in, so the shader must not add
+    /// its own.
+    func overlayParams(rect: CGRect, opacity: Double, outputSize: CGSize) -> LayerParams {
         var p = LayerParams()
         p.outputSize = SIMD2(Float(outputSize.width), Float(outputSize.height))
-        p.sourceSize = SIMD2(Float(k.rect.width), Float(k.rect.height))
-        p.src = SIMD4(0, 0, Float(k.rect.width), Float(k.rect.height))
-        p.dst = SIMD4(Float(k.rect.origin.x), Float(k.rect.origin.y),
-                      Float(k.rect.width), Float(k.rect.height))
-        p.opacity = Float(k.opacity)
-        // The chip already carries its own rounding and border in the bitmap.
+        p.sourceSize = SIMD2(Float(rect.width), Float(rect.height))
+        p.src = SIMD4(0, 0, Float(rect.width), Float(rect.height))
+        p.dst = SIMD4(Float(rect.origin.x), Float(rect.origin.y),
+                      Float(rect.width), Float(rect.height))
+        p.opacity = Float(opacity)
         p.cornerRadius = 0
         p.shadowOpacity = 0
         p.borderWidth = 0
-        return Draw(texture: tex, params: p)
+        return p
     }
 }
 

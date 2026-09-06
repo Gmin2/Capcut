@@ -187,6 +187,10 @@ public final class PreviewController: NSObject, MTKViewDelegate {
                                       outputSize: state.outputSize) {
             layers.append(k)
         }
+        if let c = engine.calloutDraw(f, theme: state.timeline.calloutTheme,
+                                      outputSize: state.outputSize) {
+            layers.append(c)
+        }
 
         engine.draw(background: f.background, layers: layers, cursor: f.cursor,
                     into: drawable.texture, present: drawable)

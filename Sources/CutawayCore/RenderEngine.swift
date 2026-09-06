@@ -16,6 +16,7 @@ public final class RenderEngine {
     private let cursorPipeline: MTLRenderPipelineState
     private var cursorTexture: MTLTexture?
     private var keycastCache: (text: String, height: Int, texture: MTLTexture)?
+    private var calloutCache: (id: String, texture: MTLTexture)?
     private var textureCache: CVMetalTextureCache!
 
     public struct Draw {
@@ -102,6 +103,16 @@ public final class RenderEngine {
                                              outputHeight: outputHeight),
               let tex = try? makeTexture(from: img) else { return nil }
         keycastCache = (key, Int(outputHeight), tex)
+        return tex
+    }
+
+    public func calloutTexture(_ c: Callout, id: String, size: CGSize,
+                               theme: CalloutTheme, outputHeight: CGFloat) -> MTLTexture? {
+        if let cache = calloutCache, cache.id == id { return cache.texture }
+        guard let img = CalloutRenderer.draw(c, theme: theme, size: size,
+                                             outputHeight: outputHeight),
+              let tex = try? makeTexture(from: img) else { return nil }
+        calloutCache = (id, tex)
         return tex
     }
 

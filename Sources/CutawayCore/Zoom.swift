@@ -83,6 +83,7 @@ public struct FrameDescription {
     /// Text to show, and where. The caller turns this into a texture, because
     /// drawing it is CPU work that should only happen when the text changes.
     public var keycast: (text: String, opacity: Double, rect: CGRect)?
+    public var callout: (id: String, opacity: Double, rect: CGRect, callout: Callout)?
 }
 
 public final class Timeline: @unchecked Sendable {
@@ -95,6 +96,8 @@ public final class Timeline: @unchecked Sendable {
     /// so the scene names stay the same and only their geometry changes.
     public var layouts: [String: Layout] = Layout.named
     public var keycastStyle = KeycastStyle()
+    public var callouts: [Callout] = []
+    public var calloutTheme = CalloutTheme()
     private var keyChips: [KeyChip] = []
 
     public func setKeys(_ keys: [EventRecorder.Key]) {
@@ -304,6 +307,10 @@ public final class Timeline: @unchecked Sendable {
         if let k = KeycastRenderer.frame(chips: keyChips, at: t, style: keycastStyle,
                                          outputSize: outputSize) {
             f.keycast = (k.text, k.opacity, CGRect(origin: k.origin, size: k.size))
+        }
+        if let c = CalloutRenderer.resolve(callouts, at: t, theme: calloutTheme,
+                                           outputSize: outputSize) {
+            f.callout = (c.id, c.opacity, CGRect(origin: c.origin, size: c.size), c.callout)
         }
         return f
     }

@@ -20,6 +20,8 @@ public struct Project: Codable {
     public var cursor = CursorStyle()
     public var audio = AudioSettings()
     public var keycast = KeycastStyle()
+    public var callouts: [Callout] = []
+    public var calloutTheme = CalloutTheme()
     public var voiceover: Voiceover?
 
     public struct Output: Codable {
@@ -30,6 +32,31 @@ public struct Project: Codable {
     }
 
     public static let filename = "project.json"
+
+    /// Hand-written so every field is optional on the way in. The synthesised
+    /// decoder demands all keys, which would make each new feature invalidate
+    /// every project file that already exists, including hand-edited ones.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func get<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? c.decode(T.self, forKey: key)) ?? fallback
+        }
+        version = get(.version, 1)
+        notes = try? c.decode(String.self, forKey: .notes)
+        output = get(.output, Output())
+        style = get(.style, Style.default)
+        scenes = get(.scenes, [])
+        zooms = get(.zooms, [])
+        segments = get(.segments, [])
+        cursor = get(.cursor, CursorStyle())
+        audio = get(.audio, AudioSettings())
+        keycast = get(.keycast, KeycastStyle())
+        callouts = get(.callouts, [])
+        calloutTheme = get(.calloutTheme, CalloutTheme())
+        voiceover = try? c.decode(Voiceover.self, forKey: .voiceover)
+    }
+
+    public init() {}
 
     public static func load(from dir: URL) -> Project? {
         let url = dir.appendingPathComponent(filename)
@@ -87,6 +114,8 @@ public struct Project: Codable {
         tl.clicks = events.clicks
         tl.keycastStyle = keycast
         tl.setKeys(events.keys)
+        tl.callouts = callouts
+        tl.calloutTheme = calloutTheme
         tl.timeMap = TimeMap(segments: segments, sourceDuration: sourceDuration)
         return tl
     }

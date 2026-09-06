@@ -191,6 +191,10 @@ public enum Export {
                                                   outputSize: outputSize) {
                         layers.append(k)
                     }
+                    if let c = engine.calloutDraw(f, theme: tl.calloutTheme,
+                                                  outputSize: outputSize) {
+                        layers.append(c)
+                    }
 
                     guard let pool = adaptor.pixelBufferPool else { continue }
                     var dst: CVPixelBuffer?

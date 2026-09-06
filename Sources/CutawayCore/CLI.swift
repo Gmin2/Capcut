@@ -18,6 +18,7 @@ public enum CLI {
             case "record":   return try await record(args)
             case "export":   return try await export(args)
             case "describe": return try describe(args)
+            case "still":    return try await still(args)
             case "voices":   return voices()
             case "help", "--help", "-h": usage(); return 0
             default:
@@ -103,6 +104,10 @@ public enum CLI {
           describe [--in DIR] [--json]
               Prints what is in a recording: duration, tracks, clicks, cuts,
               zooms, scenes and the transcript. Start here before editing.
+
+          still --at T[,T2,...] [--in DIR] [--out FILE] [--preset NAME]
+              Renders composited frames to PNG. Much faster than an export
+              when checking a layout or an overlay.
 
           voices
               Lists installed speech voices for project.json voiceover.
@@ -256,6 +261,31 @@ public enum CLI {
             for s in t.sentences() {
                 print("  [\(fmt(s.t))-\(fmt(s.t + s.duration))]  \(s.text)")
             }
+        }
+        return 0
+    }
+
+    static func still(_ args: [String]) async throws -> Int32 {
+        let opts = Options(args)
+        let dir = opts.url("--in") ?? defaultDir
+        let times = (opts.value("--at") ?? "1.0")
+            .split(whereSeparator: { ", ".contains($0) })
+            .compactMap { Double($0) }
+        guard !times.isEmpty else {
+            FileHandle.standardError.write(Data("--at needs at least one time\n".utf8))
+            return 1
+        }
+        let preset = opts.value("--preset").flatMap { ExportPreset.named[$0.lowercased()] }
+            ?? ExportPreset.hd
+        let base = opts.url("--out") ?? dir.appendingPathComponent("still.png")
+
+        for (i, t) in times.enumerated() {
+            let target = times.count == 1 ? base
+                : base.deletingPathExtension()
+                      .appendingPathExtension("\(i + 1).png")
+            try await Still.render(recordingDir: dir, at: t,
+                                   outputSize: preset.size, preset: preset, to: target)
+            emit(target.path)
         }
         return 0
     }

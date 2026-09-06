@@ -25,13 +25,11 @@ fi
 # enforces library validation on a direct exec, and refuses an unsigned load.
 mkdir -p "$SUPPORT"
 cp "$BUILT/libCutawayCore.dylib" "$SUPPORT/libCutawayCore.dylib"
-DYLIB_IDENTITY=$(security find-identity -v -p codesigning \
-    | awk -F\" '/Apple Development|Developer ID/ {print $2; exit}')
-if [ -n "$DYLIB_IDENTITY" ]; then
-    codesign --force --sign "$DYLIB_IDENTITY" "$SUPPORT/libCutawayCore.dylib" 2>/dev/null
-else
-    codesign --force --sign - "$SUPPORT/libCutawayCore.dylib" 2>/dev/null
-fi
+# Ad-hoc, not the dev identity. Signing with the identity needs the private
+# key, and macOS will block on a keychain dialog if its access control has been
+# reset - which stalls every build. The host carries
+# disable-library-validation instead, so an ad-hoc dylib loads fine.
+codesign --force --sign - "$SUPPORT/libCutawayCore.dylib" 2>/dev/null || true
 
 # The part that must never change.
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -57,7 +55,7 @@ IDENTITY=$(security find-identity -v -p codesigning \
 # No hardened runtime: it enables library validation, which would refuse to
 # load our unsigned dylib. Not needed until we notarise.
 if [ -n "$IDENTITY" ]; then
-    codesign --force --sign "$IDENTITY" "$APP"
+    codesign --force --entitlements Cutaway.entitlements --sign "$IDENTITY" "$APP"
     echo "HOST CHANGED - rebuilt and signed with $IDENTITY"
 else
     codesign --force --sign - "$APP"

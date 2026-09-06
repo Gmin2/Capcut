@@ -11,6 +11,7 @@ public enum Still {
     public static func render(recordingDir: URL, at seconds: Double,
                               outputSize: CGSize = CGSize(width: 1920, height: 1080),
                               timeline: Timeline? = nil,
+                              preset: ExportPreset? = nil,
                               to png: URL) async throws {
         let manifest = Manifest.load(from: recordingDir.appendingPathComponent("recording.json"))
 
@@ -39,6 +40,9 @@ public enum Still {
             hasWebcam: manifest?.webcam != nil)
             .timeline(sourceSize: screenSize, events: Events.load(from: recordingDir),
                       sourceDuration: manifest?.screen.duration ?? 0)
+        if let override = preset?.layoutOverride {
+            tl.layouts = Layout.named.merging(override) { _, new in new }
+        }
         let state = RenderState(screenSize: screenSize, webcamSize: webcamSize,
                                 outputSize: outputSize, timeline: tl)
         let f = state.evaluate(atSourceTime: seconds)
@@ -54,6 +58,10 @@ public enum Still {
 
         if let k = engine.keycastDraw(f, style: tl.keycastStyle, outputSize: outputSize) {
             layers.append(k)
+        }
+        if let c = engine.calloutDraw(f, theme: tl.calloutTheme,
+                                      outputSize: outputSize) {
+            layers.append(c)
         }
         let layerCount = layers.count
 
