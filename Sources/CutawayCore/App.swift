@@ -376,8 +376,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task {
                     self.preview?.seek(to: 3.0)
                     try? await Task.sleep(nanoseconds: 700_000_000)
-                    try? await Snapshot.captureDisplay(
-                        to: URL(fileURLWithPath: base + "/editor.png"))
+                    do {
+                        try await Snapshot.captureDisplay(
+                            to: URL(fileURLWithPath: base + "/editor.png"))
+                    } catch {
+                        Log.line("snapshot failed: \(error)")
+                    }
                 }
             }
         }
