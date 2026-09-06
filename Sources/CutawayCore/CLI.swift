@@ -31,6 +31,7 @@ public enum CLI {
             case "pack":     return try pack(args)
             case "trim":     return try trim(args)
             case "windows":  return try await windows()
+            case "displays": return try await displays()
             case "voices":   return voices()
             case "help", "--help", "-h": usage(); return 0
             default:
@@ -49,7 +50,7 @@ public enum CLI {
     static let childMarker = "--cutaway-child"
 
     static func needsAppLaunch(_ args: [String]) -> Bool {
-        ["record", "snap", "doctor", "windows"].contains(args.first ?? "")
+        ["record", "snap", "doctor", "windows", "displays"].contains(args.first ?? "")
     }
 
     /// Runs this same bundle as an app and forwards its output.
@@ -140,13 +141,14 @@ public enum CLI {
 
           record [--seconds N] [--out DIR] [--no-webcam] [--no-mic]
                  [--system-audio] [--keys] [--countdown N]
-                 [--exclude bundle.id,...] [--only bundle.id]
+                 [--exclude bundle.id,...] [--only bundle.id] [--display ID]
               Records the screen, then writes display.mov, events.json,
               recording.json, transcript.json and a default project.json.
               --keys logs keystrokes for the overlay; needs Input Monitoring.
               --exclude keeps an app's windows out of the capture entirely.
               --only captures just one app instead of the whole display.
-              Use `cutaway windows` to find bundle ids.
+              Use `cutaway windows` to find bundle ids and `cutaway displays`
+              to find display ids.
 
           export [--in DIR] [--out FILE] [--preset NAME] [--all]
                  [--width N] [--height N] [--fps N]
@@ -184,6 +186,9 @@ public enum CLI {
           windows
               Lists open windows and their bundle ids, for --exclude and --only.
 
+          displays
+              Lists displays and their ids, for --display.
+
           voices
               Lists installed speech voices for project.json voiceover.
 
@@ -208,6 +213,7 @@ public enum CLI {
             .split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         r.onlyApp = opts.value("--only")
+        r.displayID = opts.double("--display").map { CGDirectDisplayID($0) }
 
         try await r.start(to: dir.appendingPathComponent("display.mov"))
         // A CLI recording is unattended, so it runs for a fixed span rather
@@ -442,6 +448,24 @@ public enum CLI {
         let freed = try Document.discardMedia(in: dir)
         Log.line(String(format: "freed %.1f MB of raw capture", Double(freed) / 1_048_576))
         emit(dir.path)
+        return 0
+    }
+
+    static func displays() async throws -> Int32 {
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true)
+        let main = CGMainDisplayID()
+        for d in content.displays {
+            let screen = NSScreen.screens.first {
+                ($0.deviceDescription[.init("NSScreenNumber")] as? CGDirectDisplayID) == d.displayID
+            }
+            let scale = screen?.backingScaleFactor ?? 2
+            let name = screen?.localizedName ?? "display"
+            let tag = d.displayID == main ? "  (main)" : ""
+            emit("\(String(d.displayID).padding(toLength: 12, withPad: " ", startingAt: 0))"
+                 + "\(Int(CGFloat(d.width) * scale))x\(Int(CGFloat(d.height) * scale))"
+                 + "  \(name)\(tag)")
+        }
         return 0
     }
 

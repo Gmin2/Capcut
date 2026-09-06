@@ -8,7 +8,7 @@ public enum Snapshot {
     public static func captureDisplay(to url: URL) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first else {
+        guard let display = Recorder.pickDisplay(content, id: nil) else {
             throw NSError(domain: "cutaway", code: 40)
         }
         let scale = NSScreen.screens.first {

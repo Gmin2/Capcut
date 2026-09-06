@@ -42,6 +42,9 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     public var excludeApps: [String] = []
     /// Capture just this app's windows instead of the whole display.
     public var onlyApp: String?
+    /// Which display to record. nil means the one with the menu bar, which is
+    /// what a person means by "my screen" when they have two.
+    public var displayID: CGDirectDisplayID?
 
     public private(set) var isRecording = false
     public var isPaused: Bool { clock.isPaused }
@@ -59,9 +62,12 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
         let content = try await SCShareableContent.excludingDesktopWindows(
             false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first else {
+        guard let display = Recorder.pickDisplay(content, id: displayID) else {
             throw NSError(domain: "cutaway", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "no display"])
+        }
+        if content.displays.count > 1 {
+            Log.line("recording display \(display.displayID) of \(content.displays.count)")
         }
 
         let screen = NSScreen.screens.first {
@@ -262,6 +268,19 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
         Log.line("stream stopped with error: \(error)")
+    }
+
+    /// Chooses a display by id, falling back to the main one. `displays.first`
+    /// is not the main display on a multi-monitor Mac; it is whichever the
+    /// system lists first, which is why this is not inlined.
+    static func pickDisplay(_ content: SCShareableContent,
+                            id: CGDirectDisplayID?) -> SCDisplay? {
+        if let id, let match = content.displays.first(where: { $0.displayID == id }) {
+            return match
+        }
+        let main = CGMainDisplayID()
+        return content.displays.first(where: { $0.displayID == main })
+            ?? content.displays.first
     }
 
     /// Builds the capture filter. Exclusion is matched on bundle id rather

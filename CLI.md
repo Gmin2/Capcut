@@ -29,6 +29,15 @@ you have time to get to the right app. Put `0` in
 Every one of these rewrites `project.json`, so a UI edit and a scripted edit are
 the same operation and neither can get out of step with the other.
 
+## Choosing a display
+
+    cutaway displays                      # ids, sizes, which is main
+    cutaway record --display 2
+
+With no `--display` it records the screen with the menu bar. Note that
+`displays.first` is not the main display on a multi-monitor Mac, so passing an
+id is worth doing when you have two.
+
 ## Keeping things out of shot
 
     cutaway windows                                  # find bundle ids
