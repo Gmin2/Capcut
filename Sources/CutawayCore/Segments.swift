@@ -79,6 +79,31 @@ public struct TimeMap {
 }
 
 /// Finds the parts of a recording nobody wants to watch.
+/// A region of the screen hidden after the fact. Window exclusion at capture
+/// time is always better, because the pixels never exist; this is for what you
+/// only noticed afterwards.
+public struct Mask: Codable {
+    /// Normalised to the *source* frame, so a mask stays on the thing it hides
+    /// even while the camera zooms and pans.
+    public var rect: [Double]
+    public var start: Double = 0
+    public var end: Double = .greatestFiniteMagnitude
+    /// "mosaic" or "blur". Mosaic is the safer default: a blur can sometimes
+    /// be inverted, a large enough mosaic cannot.
+    public var style: String = "mosaic"
+    public var strength: Double = 26
+
+    public init(rect: [Double], start: Double = 0,
+                end: Double = .greatestFiniteMagnitude,
+                style: String = "mosaic", strength: Double = 26) {
+        self.rect = rect
+        self.start = start
+        self.end = end
+        self.style = style
+        self.strength = strength
+    }
+}
+
 public enum AutoCut {
 
     public struct Tuning {

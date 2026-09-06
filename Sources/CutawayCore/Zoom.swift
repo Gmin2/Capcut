@@ -99,6 +99,7 @@ public final class Timeline: @unchecked Sendable {
     public var callouts: [Callout] = []
     public var calloutTheme = CalloutTheme()
     public var deviceFrame: DeviceFrame = .none
+    public var masks: [Mask] = []
     private var keyChips: [KeyChip] = []
 
     public func setKeys(_ keys: [EventRecorder.Key]) {
@@ -301,6 +302,7 @@ public final class Timeline: @unchecked Sendable {
             let c = crop(at: t)
             s.src = SIMD4(Float(c.origin.x), Float(c.origin.y),
                           Float(c.width), Float(c.height))
+            applyMasks(to: &s, at: t)
             screen = s
         }
         var f = FrameDescription(background: style.backgroundParams(outputSize: outputSize),
@@ -316,6 +318,28 @@ public final class Timeline: @unchecked Sendable {
             f.callout = (c.id, c.opacity, CGRect(origin: c.origin, size: c.size), c.callout)
         }
         return f
+    }
+
+    /// Packs up to four active masks into the layer's shader parameters.
+    /// Four is a deliberate limit: more than that on one recording means the
+    /// window should have been excluded at capture time instead.
+    private func applyMasks(to layer: inout LayerParams, at t: Double) {
+        let active = masks.filter { t >= $0.start && t <= $0.end }.prefix(4)
+        var rects = [SIMD4<Float>](repeating: SIMD4<Float>(), count: 4)
+        var strengths = SIMD4<Float>()
+        for (i, m) in active.enumerated() where m.rect.count == 4 {
+            rects[i] = SIMD4(Float(m.rect[0] * sourceSize.width),
+                             Float(m.rect[1] * sourceSize.height),
+                             Float(m.rect[2] * sourceSize.width),
+                             Float(m.rect[3] * sourceSize.height))
+            // Sign carries the style, which keeps the shader struct small.
+            strengths[i] = m.style == "blur" ? -Float(m.strength) : Float(m.strength)
+        }
+        layer.mask0 = rects[0]
+        layer.mask1 = rects[1]
+        layer.mask2 = rects[2]
+        layer.mask3 = rects[3]
+        layer.maskStrength = strengths
     }
 
     public func crop(at t: Double) -> CGRect {

@@ -36,5 +36,12 @@ public struct LayerParams {
     public var frameBar: Float = 0
     /// 0 none, 1 macOS window, 2 browser.
     public var frameKind: Float = 0
+    /// Up to four masked regions in source pixels: x, y, w, h.
+    public var mask0 = SIMD4<Float>()
+    public var mask1 = SIMD4<Float>()
+    public var mask2 = SIMD4<Float>()
+    public var mask3 = SIMD4<Float>()
+    /// Per-mask strength; 0 means unused. Negative means blur, positive mosaic.
+    public var maskStrength = SIMD4<Float>()
     public init() {}
 }

@@ -24,6 +24,7 @@ public struct Project: Codable {
     public var calloutTheme = CalloutTheme()
     /// "none", "macWindow" or "browser", drawn around the screen layer.
     public var deviceFrame: DeviceFrame = .none
+    public var masks: [Mask] = []
     public var voiceover: Voiceover?
 
     public struct Output: Codable {
@@ -56,6 +57,7 @@ public struct Project: Codable {
         callouts = get(.callouts, [])
         calloutTheme = get(.calloutTheme, CalloutTheme())
         deviceFrame = get(.deviceFrame, DeviceFrame.none)
+        masks = get(.masks, [])
         voiceover = try? c.decode(Voiceover.self, forKey: .voiceover)
     }
 
@@ -120,6 +122,7 @@ public struct Project: Codable {
         tl.callouts = callouts
         tl.calloutTheme = calloutTheme
         tl.deviceFrame = deviceFrame
+        tl.masks = masks
         tl.timeMap = TimeMap(segments: segments, sourceDuration: sourceDuration)
         return tl
     }

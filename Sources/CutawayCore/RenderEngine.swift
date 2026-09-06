@@ -244,6 +244,11 @@ public final class RenderEngine {
         float circle;
         float frameBar;
         float frameKind;
+        float4 mask0;
+        float4 mask1;
+        float4 mask2;
+        float4 mask3;
+        float4 maskStrength;
     };
 
     struct CursorParams {
@@ -308,7 +313,42 @@ public final class RenderEngine {
         float2 contentSize = P.dst.zw - float2(0.0, P.frameBar);
         float2 local = (p - contentOrigin) / max(contentSize, float2(1.0));
         float2 srcPx = P.src.xy + local * P.src.zw;
-        float3 c = src.sample(smp, srcPx / P.sourceSize).rgb;
+
+        // Masks are applied in source space, so a hidden region stays on the
+        // thing it hides even while the camera zooms and pans over it.
+        float4 masks[4] = { P.mask0, P.mask1, P.mask2, P.mask3 };
+        float2 sampleAt = srcPx;
+        float blurAmount = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            float strength = P.maskStrength[i];
+            if (strength == 0.0) { continue; }
+            float4 m = masks[i];
+            if (srcPx.x < m.x || srcPx.x > m.x + m.z ||
+                srcPx.y < m.y || srcPx.y > m.y + m.w) { continue; }
+            if (strength > 0.0) {
+                // Mosaic: quantise the sample position to a grid.
+                sampleAt = m.xy + (floor((srcPx - m.xy) / strength) + 0.5) * strength;
+            } else {
+                blurAmount = -strength;
+            }
+        }
+
+        float3 c;
+        if (blurAmount > 0.0) {
+            // Cheap box blur. Enough to destroy text, which is the job.
+            float3 acc = float3(0.0);
+            float total = 0.0;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    float2 o = float2(float(dx), float(dy)) * blurAmount * 0.5;
+                    acc += src.sample(smp, (sampleAt + o) / P.sourceSize).rgb;
+                    total += 1.0;
+                }
+            }
+            c = acc / total;
+        } else {
+            c = src.sample(smp, sampleAt / P.sourceSize).rgb;
+        }
 
         if (P.frameBar > 0.5) {
             float yInBar = p.y - P.dst.y;
