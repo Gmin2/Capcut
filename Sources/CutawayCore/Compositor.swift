@@ -4,6 +4,29 @@ import CoreVideo
 
 /// Immutable snapshot the renderer reads. Published atomically on edit rather
 /// than mutated, because AVFoundation calls the compositor concurrently.
+public extension RenderEngine {
+    /// Turns a frame's keycast description into a drawable layer.
+    func keycastDraw(_ f: FrameDescription, style: KeycastStyle,
+                     outputSize: CGSize) -> Draw? {
+        guard let k = f.keycast, k.opacity > 0.01,
+              let tex = keycastTexture(text: k.text, size: k.rect.size,
+                                       style: style, outputHeight: outputSize.height)
+        else { return nil }
+        var p = LayerParams()
+        p.outputSize = SIMD2(Float(outputSize.width), Float(outputSize.height))
+        p.sourceSize = SIMD2(Float(k.rect.width), Float(k.rect.height))
+        p.src = SIMD4(0, 0, Float(k.rect.width), Float(k.rect.height))
+        p.dst = SIMD4(Float(k.rect.origin.x), Float(k.rect.origin.y),
+                      Float(k.rect.width), Float(k.rect.height))
+        p.opacity = Float(k.opacity)
+        // The chip already carries its own rounding and border in the bitmap.
+        p.cornerRadius = 0
+        p.shadowOpacity = 0
+        p.borderWidth = 0
+        return Draw(texture: tex, params: p)
+    }
+}
+
 public final class RenderState: @unchecked Sendable {
     public let screenSize: CGSize
     public let webcamSize: CGSize?

@@ -80,6 +80,9 @@ public struct FrameDescription {
     public var screen: LayerParams?
     public var webcam: LayerParams?
     public var cursor: CursorParams?
+    /// Text to show, and where. The caller turns this into a texture, because
+    /// drawing it is CPU work that should only happen when the text changes.
+    public var keycast: (text: String, opacity: Double, rect: CGRect)?
 }
 
 public final class Timeline: @unchecked Sendable {
@@ -91,6 +94,12 @@ public final class Timeline: @unchecked Sendable {
     /// Per-export layout table. Vertical and square output reframe everything,
     /// so the scene names stay the same and only their geometry changes.
     public var layouts: [String: Layout] = Layout.named
+    public var keycastStyle = KeycastStyle()
+    private var keyChips: [KeyChip] = []
+
+    public func setKeys(_ keys: [EventRecorder.Key]) {
+        keyChips = KeycastBuilder.chips(from: keys, style: keycastStyle)
+    }
     public var clicks: [(t: Double, p: CGPoint)] = []
     /// Cuts and speed ramps. Effects stay in source time; this maps to output.
     public var timeMap = TimeMap(segments: [], sourceDuration: 0)
@@ -288,10 +297,15 @@ public final class Timeline: @unchecked Sendable {
                           Float(c.width), Float(c.height))
             screen = s
         }
-        return FrameDescription(background: style.backgroundParams(outputSize: outputSize),
-                                screen: screen, webcam: webcam,
-                                cursor: cursorParams(at: t, screen: screen,
-                                                     outputSize: outputSize))
+        var f = FrameDescription(background: style.backgroundParams(outputSize: outputSize),
+                                 screen: screen, webcam: webcam,
+                                 cursor: cursorParams(at: t, screen: screen,
+                                                      outputSize: outputSize))
+        if let k = KeycastRenderer.frame(chips: keyChips, at: t, style: keycastStyle,
+                                         outputSize: outputSize) {
+            f.keycast = (k.text, k.opacity, CGRect(origin: k.origin, size: k.size))
+        }
+        return f
     }
 
     public func crop(at t: Double) -> CGRect {

@@ -52,13 +52,19 @@ public enum Still {
             layers.append(.init(texture: try engine.makeTexture(from: wi), params: wp))
         }
 
+        if let k = engine.keycastDraw(f, style: tl.keycastStyle, outputSize: outputSize) {
+            layers.append(k)
+        }
+        let layerCount = layers.count
+
         let out = try engine.renderImage(background: f.background, layers: layers,
                                          cursor: f.cursor, size: outputSize)
         try write(out, to: png)
         Log.line("""
           still t=\(String(format: "%.2f", seconds))s  \
-          layers=\(layers.count)  \
+          layers=\(layerCount)  \
           screen=\(f.screen.map { "\(Int($0.dst.z))x\(Int($0.dst.w))@\(Int($0.dst.x)),\(Int($0.dst.y)) op\(String(format: "%.2f", $0.opacity))" } ?? "none")  \
+          keycast=\(f.keycast.map { "\"\($0.text)\" op\(String(format: "%.2f", $0.opacity))" } ?? "none")  \
           cursor=\(f.cursor.map { String(format: "rect %.0f,%.0f %.0fx%.0f op%.2f ripple r%.0f a%.2f", $0.rect.x, $0.rect.y, $0.rect.z, $0.rect.w, $0.opacity, $0.rippleRadius, $0.rippleAlpha) } ?? "NIL")  \
           webcam=\(f.webcam.map { "\(Int($0.dst.z))x\(Int($0.dst.w))@\(Int($0.dst.x)),\(Int($0.dst.y)) op\(String(format: "%.2f", $0.opacity))" } ?? "none")
           """)

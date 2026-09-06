@@ -4,7 +4,7 @@ Everything the app does is scriptable. The CLI is the same binary as the app, so
 it inherits the same screen-recording permission.
 
 ```
-cutaway record --seconds 30 --out ~/demos/pitch
+cutaway record --seconds 30 --out ~/demos/pitch --keys
 cutaway describe --in ~/demos/pitch
 # edit ~/demos/pitch/project.json
 cutaway export --in ~/demos/pitch --out ~/demos/pitch.mp4
@@ -49,6 +49,7 @@ the edit change as you write it.
 | `segments` | kept spans `{sourceStart, sourceEnd, speed}`; omitted time is cut |
 | `voiceover` | `{engine, voice, rate, lines: [{at, text}]}`, synthesised on device |
 | `cursor` | `{visible, scale, smoothing, clickRipple, rippleRadius}` |
+| `keycast` | `{visible, position, holdFor, mergeWindow, maxChips, fontSize}` |
 | `audio` | `{mic, system, voiceover, duckSystemUnderVoice}` |
 | `style.background` | `{from, to, angle}` |
 
@@ -60,7 +61,7 @@ the edit change as you write it.
 display.mov       native resolution, cursor excluded
 webcam.mov        camera, if enabled
 mic.m4a           narration
-events.json       cursor at 120Hz, clicks, app switches
+events.json       cursor at 120Hz, clicks, app switches, keystrokes
 transcript.json   on-device, word timestamps
 recording.json    track sizes, durations and inter-track offsets
 project.json      the edit
@@ -68,3 +69,14 @@ project.json      the edit
 
 `events.json` plus `transcript.json` describe a recording completely in text,
 which is what makes editing possible without looking at pixels.
+
+## Keystroke overlay
+
+`--keys` logs keystrokes so the renderer can show them. It needs **Input
+Monitoring**, which macOS only applies on the next launch:
+
+    System Settings > Privacy & Security > Input Monitoring > Cutaway
+
+Without the grant, recording carries on and simply logs no keys. Typing merges
+into words; chords like ⌘⇧P stay whole, because the chord is the interesting
+event and the letter is not.

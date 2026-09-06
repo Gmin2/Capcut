@@ -33,6 +33,8 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     public var captureWebcam = false
     public var captureMicrophone = false
     public var captureSystemAudio = false
+    /// Keystroke overlay. Needs Input Monitoring, so it stays off by default.
+    public var captureKeys = false
 
     public private(set) var isRecording = false
     public var isPaused: Bool { clock.isPaused }
@@ -125,7 +127,14 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         let space = CaptureSpace(screenFrame: screen?.frame
             ?? CGRect(x: 0, y: 0, width: CGFloat(display.width), height: CGFloat(display.height)),
             scale: scale)
-        events = EventRecorder(space: space, clock: clock)
+        let er = EventRecorder(space: space, clock: clock)
+        er.captureKeys = captureKeys
+        if captureKeys, !EventRecorder.canCaptureKeys {
+            EventRecorder.requestKeyAccess()
+            Log.line("keycast: grant Input Monitoring in System Settings, "
+                     + "then relaunch Cutaway. Recording without keystrokes.")
+        }
+        events = er
 
         isRecording = true
         Log.line("recording \(w)x\(h) @60 -> \(url.lastPathComponent)")

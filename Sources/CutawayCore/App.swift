@@ -208,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         r.captureWebcam = !off("noWebcam")
         r.captureMicrophone = !off("noMic")
         r.captureSystemAudio = !off("noSystemAudio")
+        r.captureKeys = off("keycast")
         r.onStateChange = { [weak self] in
             DispatchQueue.main.async { self?.refreshRecordUI() }
         }

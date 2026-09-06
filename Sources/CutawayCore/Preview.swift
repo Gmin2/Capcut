@@ -183,6 +183,11 @@ public final class PreviewController: NSObject, MTKViewDelegate {
             if let tex = lastWebcam { layers.append(.init(texture: tex, params: wp)) }
         }
 
+        if let k = engine.keycastDraw(f, style: state.timeline.keycastStyle,
+                                      outputSize: state.outputSize) {
+            layers.append(k)
+        }
+
         engine.draw(background: f.background, layers: layers, cursor: f.cursor,
                     into: drawable.texture, present: drawable)
         framesDrawn += 1

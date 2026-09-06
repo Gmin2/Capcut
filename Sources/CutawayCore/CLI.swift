@@ -88,9 +88,11 @@ public enum CLI {
         print("""
         cutaway <command>
 
-          record [--seconds N] [--out DIR] [--no-webcam] [--no-mic] [--system-audio]
+          record [--seconds N] [--out DIR] [--no-webcam] [--no-mic]
+                 [--system-audio] [--keys]
               Records the screen, then writes display.mov, events.json,
               recording.json, transcript.json and a default project.json.
+              --keys logs keystrokes for the overlay; needs Input Monitoring.
 
           export [--in DIR] [--out FILE] [--preset NAME] [--all]
                  [--width N] [--height N] [--fps N]
@@ -121,6 +123,7 @@ public enum CLI {
         r.captureWebcam = !opts.flag("--no-webcam")
         r.captureMicrophone = !opts.flag("--no-mic")
         r.captureSystemAudio = opts.flag("--system-audio")
+        r.captureKeys = opts.flag("--keys")
 
         try await r.start(to: dir.appendingPathComponent("display.mov"))
         // A CLI recording is unattended, so it runs for a fixed span rather

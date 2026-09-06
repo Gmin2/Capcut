@@ -19,6 +19,7 @@ public struct Project: Codable {
     public var segments: [Segment] = []
     public var cursor = CursorStyle()
     public var audio = AudioSettings()
+    public var keycast = KeycastStyle()
     public var voiceover: Voiceover?
 
     public struct Output: Codable {
@@ -84,6 +85,8 @@ public struct Project: Codable {
         tl.style = style
         tl.cursorStyle = self.cursor
         tl.clicks = events.clicks
+        tl.keycastStyle = keycast
+        tl.setKeys(events.keys)
         tl.timeMap = TimeMap(segments: segments, sourceDuration: sourceDuration)
         return tl
     }
@@ -93,6 +96,7 @@ public struct Project: Codable {
 public struct Events {
     public var clicks: [(t: Double, p: CGPoint)] = []
     public var cursor: [(t: Double, p: CGPoint)] = []
+    public var keys: [EventRecorder.Key] = []
 
     public static func load(from dir: URL) -> Events {
         var e = Events()
@@ -101,6 +105,7 @@ public struct Events {
         else { return e }
         e.clicks = ev.clicks.map { (t: $0.t, p: CGPoint(x: $0.x, y: $0.y)) }
         e.cursor = ev.cursor.map { (t: $0.t, p: CGPoint(x: $0.x, y: $0.y)) }
+        e.keys = ev.keys
         return e
     }
 }

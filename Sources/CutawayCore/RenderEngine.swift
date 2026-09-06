@@ -15,6 +15,7 @@ public final class RenderEngine {
     private let layerPipeline: MTLRenderPipelineState
     private let cursorPipeline: MTLRenderPipelineState
     private var cursorTexture: MTLTexture?
+    private var keycastCache: (text: String, height: Int, texture: MTLTexture)?
     private var textureCache: CVMetalTextureCache!
 
     public struct Draw {
@@ -86,6 +87,22 @@ public final class RenderEngine {
                 .bgra8Unorm, w, h, 0, &out) == kCVReturnSuccess,
               let out else { return nil }
         return CVMetalTextureGetTexture(out)
+    }
+
+    /// Overlay texture for the keycast chip, redrawn only when the text or
+    /// the output size changes. Drawing text is CPU work and would otherwise
+    /// happen on every frame for a string that changes once a second.
+    public func keycastTexture(text: String, size: CGSize, style: KeycastStyle,
+                               outputHeight: CGFloat) -> MTLTexture? {
+        let key = "\(text)|\(Int(size.width))x\(Int(size.height))"
+        if let c = keycastCache, c.text == key, c.height == Int(outputHeight) {
+            return c.texture
+        }
+        guard let img = KeycastRenderer.draw(text: text, size: size, style: style,
+                                             outputHeight: outputHeight),
+              let tex = try? makeTexture(from: img) else { return nil }
+        keycastCache = (key, Int(outputHeight), tex)
+        return tex
     }
 
     public func makeTexture(from image: CGImage) throws -> MTLTexture {

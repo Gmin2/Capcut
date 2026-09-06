@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import IOKit.hid
 import CoreMedia
 
 /// Records what the user did, alongside the video. This is the file that makes
@@ -15,6 +16,17 @@ public final class EventRecorder {
     }
     public struct AppSwitch: Codable { public let t: Double; public let bundleId: String; public let name: String }
 
+    /// One keystroke, already rendered to the label a viewer should see
+    /// ("⌘S", "⇧⌥→", "return"). Storing the label rather than the key code
+    /// keeps the renderer dumb and the file readable.
+    public struct Key: Codable {
+        public let t: Double
+        public let label: String
+        /// True for plain typing, which the overlay coalesces into words
+        /// instead of flashing one box per letter.
+        public let isText: Bool
+    }
+
     public struct Events: Codable {
         public let version: Int
         public let displayPixelSize: [Double]
@@ -23,6 +35,7 @@ public final class EventRecorder {
         public let cursor: [CursorSample]
         public let clicks: [Click]
         public let apps: [AppSwitch]
+        public var keys: [Key] = []
     }
 
     private let space: CaptureSpace
@@ -31,11 +44,31 @@ public final class EventRecorder {
     private var cursor: [CursorSample] = []
     private var clicks: [Click] = []
     private var apps: [AppSwitch] = []
+    private var keys: [Key] = []
 
     private var timer: DispatchSourceTimer?
     private var monitors: [Any] = []
     private var appObserver: NSObjectProtocol?
     private let lock = NSLock()
+
+    /// Off unless asked for: keystroke capture needs Input Monitoring, and a
+    /// screen recorder should not demand it just to record a screen.
+    public var captureKeys = false
+
+    /// Whether this process may observe keystrokes. Checked without prompting,
+    /// so the caller can decide whether asking is worth it.
+    public static var canCaptureKeys: Bool {
+        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+    }
+
+    /// Triggers the Input Monitoring prompt. Returns immediately; macOS shows
+    /// the dialog and the grant only takes effect on the next launch, so the
+    /// caller should say so rather than waiting.
+    @discardableResult
+    public static func requestKeyAccess() -> Bool {
+        if canCaptureKeys { return true }
+        return IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+    }
 
     public init(space: CaptureSpace, clock: RecordClock) {
         self.space = space
@@ -79,6 +112,19 @@ public final class EventRecorder {
             self.lock.unlock()
         }) { monitors.append(m) }
 
+        if captureKeys, EventRecorder.canCaptureKeys {
+            let keyMask: NSEvent.EventTypeMask = [.keyDown, .flagsChanged]
+            if let m = NSEvent.addGlobalMonitorForEvents(matching: keyMask, handler: {
+                [weak self] e in
+                guard let self, !self.clock.isPaused else { return }
+                guard let label = KeyLabel.make(from: e) else { return }
+                self.lock.lock()
+                self.keys.append(Key(t: self.now(), label: label.text,
+                                     isText: label.isText))
+                self.lock.unlock()
+            }) { monitors.append(m) }
+        }
+
         appObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil, queue: nil
@@ -108,13 +154,14 @@ public final class EventRecorder {
             displayPixelSize: [space.pixelSize.width, space.pixelSize.height],
             backingScale: Double(space.scale),
             duration: duration,
-            cursor: cursor, clicks: clicks, apps: apps)
+            cursor: cursor, clicks: clicks, apps: apps, keys: keys)
         lock.unlock()
 
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(events).write(to: url)
 
-        Log.line("events: \(cursor.count) cursor, \(clicks.count) clicks, \(apps.count) app switches")
+        Log.line("events: \(cursor.count) cursor, \(clicks.count) clicks, "
+                 + "\(apps.count) app switches, \(keys.count) keys")
     }
 }

@@ -187,6 +187,11 @@ public enum Export {
                         layers.append(.init(texture: tex, params: wp))
                     }
 
+                    if let k = engine.keycastDraw(f, style: tl.keycastStyle,
+                                                  outputSize: outputSize) {
+                        layers.append(k)
+                    }
+
                     guard let pool = adaptor.pixelBufferPool else { continue }
                     var dst: CVPixelBuffer?
                     guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &dst) == kCVReturnSuccess,
