@@ -370,6 +370,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// rebuilt freely without touching the signed app.
 @_cdecl("cutaway_main")
 public func cutaway_main() {
+    // Arguments mean headless. Same bundle either way, which matters because
+    // the screen-recording grant is attached to this bundle's identity: a
+    // separate CLI binary would need its own.
+    let args = Array(CommandLine.arguments.dropFirst())
+        .filter { !$0.hasPrefix("-psn") }
+    if !args.isEmpty {
+        Log.toStdout = true
+        // Screen capture needs the app itself to be the responsible process.
+        // Exec'ing the binary directly makes TCC attribute the request to the
+        // parent shell instead, and it is denied. Relaunching through the
+        // bundle with `open` fixes attribution; the child writes its result to
+        // a pipe file so the CLI can still print it.
+        if CLI.needsAppLaunch(args), ProcessInfo.processInfo.environment["CUTAWAY_CHILD"] == nil {
+            exit(CLI.relaunchThroughBundle(args))
+        }
+        let code = runBlocking { await CLI.run(args) }
+        exit(code)
+    }
+
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
@@ -379,3 +398,19 @@ public func cutaway_main() {
 }
 
 private nonisolated(unsafe) var appDelegate: AppDelegate?
+
+/// Bridges the async CLI into a plain main(). A semaphore rather than a
+/// RunLoop: several capture APIs post to the main queue, so the main thread has
+/// to keep pumping while the work runs.
+private func runBlocking(_ body: @escaping () async -> Int32) -> Int32 {
+    var result: Int32 = 0
+    let done = DispatchSemaphore(value: 0)
+    Task.detached {
+        result = await body()
+        done.signal()
+    }
+    while done.wait(timeout: .now() + 0.02) == .timedOut {
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+    }
+    return result
+}

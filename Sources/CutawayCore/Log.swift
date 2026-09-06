@@ -14,9 +14,18 @@ public enum Log {
         lock.lock(); buffer = ""; lock.unlock()
     }
 
+    /// In CLI mode the log is diagnostics, so it goes to stderr and leaves
+    /// stdout clean for the actual result.
+    nonisolated(unsafe) public static var toStdout = false
+
     public static func line(_ s: String) {
-        print(s)
+        if toStdout {
+            FileHandle.standardError.write(Data((s + "\n").utf8))
+        } else {
+            print(s)
+        }
         sink?(s)
+        guard !toStdout else { return }
         lock.lock(); buffer += s + "\n"; lock.unlock()
         write()
     }

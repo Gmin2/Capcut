@@ -20,9 +20,18 @@ if ! swift build --disable-sandbox -c "$CONFIG" >/dev/null 2>&1; then
     exit 1
 fi
 
-# The part that changes every build. Never signed, never inside the bundle.
+# The part that changes every build. Outside the bundle so the app's identity
+# (and its TCC grants) never change, but signed with the same identity: dyld
+# enforces library validation on a direct exec, and refuses an unsigned load.
 mkdir -p "$SUPPORT"
 cp "$BUILT/libCutawayCore.dylib" "$SUPPORT/libCutawayCore.dylib"
+DYLIB_IDENTITY=$(security find-identity -v -p codesigning \
+    | awk -F\" '/Apple Development|Developer ID/ {print $2; exit}')
+if [ -n "$DYLIB_IDENTITY" ]; then
+    codesign --force --sign "$DYLIB_IDENTITY" "$SUPPORT/libCutawayCore.dylib" 2>/dev/null
+else
+    codesign --force --sign - "$SUPPORT/libCutawayCore.dylib" 2>/dev/null
+fi
 
 # The part that must never change.
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -55,3 +64,8 @@ else
     echo "HOST CHANGED - rebuilt, ad-hoc signed"
 fi
 echo ">>> screen recording permission must be re-granted <<<"
+
+# Convenience symlink so `cutaway <command>` works from anywhere. Runs the
+# bundle's own binary, so it inherits the app's TCC grants.
+mkdir -p "$HOME/.local/bin"
+ln -sf "$PWD/$APP/Contents/MacOS/cutaway" "$HOME/.local/bin/cutaway"
