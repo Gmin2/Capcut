@@ -11,6 +11,11 @@ public enum CLI {
 
     public static func run(_ args: [String]) async -> Int32 {
         var args = args
+        if let i = args.firstIndex(of: "--cli-out"), i + 1 < args.count {
+            outPath = args[i + 1]
+            args.removeSubrange(i...(i + 1))
+        }
+        args.removeAll { $0 == childMarker }
         let command = args.isEmpty ? "help" : args.removeFirst()
 
         do {
@@ -19,6 +24,7 @@ public enum CLI {
             case "export":   return try await export(args)
             case "describe": return try describe(args)
             case "still":    return try await still(args)
+            case "snap":     return try await snap(args)
             case "voices":   return voices()
             case "help", "--help", "-h": usage(); return 0
             default:
@@ -34,8 +40,10 @@ public enum CLI {
 
     /// Commands that touch the screen, camera or microphone. Everything else
     /// is pure file work and runs fine in-process.
+    static let childMarker = "--cutaway-child"
+
     static func needsAppLaunch(_ args: [String]) -> Bool {
-        args.first == "record"
+        ["record", "snap"].contains(args.first ?? "")
     }
 
     /// Runs this same bundle via `open`, waits, and forwards its output.
@@ -51,11 +59,8 @@ public enum CLI {
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        p.arguments = ["-W", "-n", "-a", bundle.path, "--args"] + args
-        var env = ProcessInfo.processInfo.environment
-        env["CUTAWAY_CHILD"] = "1"
-        env["CUTAWAY_CLI_OUT"] = outFile.path
-        p.environment = env
+        p.arguments = ["-W", "-n", "-a", bundle.path, "--args"]
+            + args + [childMarker, "--cli-out", outFile.path]
 
         do {
             try p.run()
@@ -74,9 +79,10 @@ public enum CLI {
 
     /// stdout is a pipe file when running as a relaunched child, since a
     /// process started by `open` has no terminal attached.
+    nonisolated(unsafe) static var outPath: String?
+
     static func emit(_ s: String) {
-        if let path = ProcessInfo.processInfo.environment["CUTAWAY_CLI_OUT"],
-           let handle = FileHandle(forWritingAtPath: path) {
+        if let path = outPath, let handle = FileHandle(forWritingAtPath: path) {
             handle.seekToEndOfFile()
             handle.write(Data((s + "\n").utf8))
             try? handle.close()
@@ -108,6 +114,9 @@ public enum CLI {
           still --at T[,T2,...] [--in DIR] [--out FILE] [--preset NAME]
               Renders composited frames to PNG. Much faster than an export
               when checking a layout or an overlay.
+
+          snap [--out FILE]
+              Screenshots the display through the app's capture grant.
 
           voices
               Lists installed speech voices for project.json voiceover.
@@ -287,6 +296,17 @@ public enum CLI {
                                    outputSize: preset.size, preset: preset, to: target)
             emit(target.path)
         }
+        return 0
+    }
+
+    /// Screenshot of the whole display. Used for looking at Cutaway's own
+    /// window during development, since a shell has no screen-recording grant.
+    static func snap(_ args: [String]) async throws -> Int32 {
+        let opts = Options(args)
+        let out = opts.url("--out")
+            ?? URL(fileURLWithPath: NSTemporaryDirectory() + "cutaway-snap.png")
+        try await Snapshot.captureDisplay(to: out)
+        emit(out.path)
         return 0
     }
 

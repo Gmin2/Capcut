@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 
 /// The timeline strip: scenes on one lane, zooms on another, playhead over
 /// both. Clicking or dragging seeks. Deliberately drawn rather than built from
@@ -9,12 +10,21 @@ public final class TimelineView: NSView {
     public var timeline: Timeline? { didSet { needsDisplay = true } }
     public var playhead: Double = 0 { didSet { needsDisplay = true } }
     public var onSeek: ((Double) -> Void)?
+    /// Called when a scene marker is dragged, so the handover point can be
+    /// moved without editing JSON.
+    public var onMoveScene: ((Int, Double) -> Void)?
+    public var onAddScene: ((Double) -> Void)?
+
+    private var thumbnails: [(t: Double, image: NSImage)] = []
+    private var thumbnailTask: Task<Void, Never>?
+    private var dragging: Int?
 
     public override var isFlipped: Bool { true }
 
     private let laneHeight: CGFloat = 26
     private let laneGap: CGFloat = 6
     private let labelInset: CGFloat = 54
+    private let filmstripHeight: CGFloat = 34
 
     public override func draw(_ dirty: NSRect) {
         guard duration > 0 else { return }
@@ -64,25 +74,46 @@ public final class TimelineView: NSView {
             }
         }
 
-        drawLabel("scenes", y: laneGap)
-        drawLabel("zoom", y: laneGap * 2 + laneHeight)
+        // Filmstrip along the top: the fastest way to find a moment.
+        if !thumbnails.isEmpty {
+            for (i, thumb) in thumbnails.enumerated() {
+                let next = i + 1 < thumbnails.count ? thumbnails[i + 1].t : duration
+                let r = NSRect(x: x(thumb.t), y: 0,
+                               width: max(1, x(next) - x(thumb.t)),
+                               height: filmstripHeight)
+                thumb.image.draw(in: r, from: .zero, operation: .copy, fraction: 0.9)
+            }
+            NSColor(calibratedWhite: 0, alpha: 0.35).setFill()
+            NSRect(x: track.minX, y: filmstripHeight - 1,
+                   width: track.width, height: 1).fill()
+        }
+
+        drawLabel("scenes", y: filmstripHeight + laneGap)
+        drawLabel("zoom", y: filmstripHeight + laneGap * 2 + laneHeight)
 
         // scenes lane
         if let tl = timeline {
             let scenes = tl.scenes.sorted { $0.at < $1.at }
             for (i, sc) in scenes.enumerated() {
                 let end = i + 1 < scenes.count ? scenes[i + 1].at : duration
-                let r = NSRect(x: x(sc.at), y: laneGap,
+                let r = NSRect(x: x(sc.at), y: filmstripHeight + laneGap,
                                width: max(2, x(end) - x(sc.at)), height: laneHeight)
                 colour(for: sc.layout).setFill()
                 NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 0),
                              xRadius: 4, yRadius: 4).fill()
                 draw(sc.layout, in: r)
+
+                // Drag handle, skipped on the opening scene because a video
+                // has to start somewhere.
+                if i > 0 {
+                    NSColor.white.setFill()
+                    NSRect(x: r.minX - 1, y: r.minY, width: 3, height: r.height).fill()
+                }
             }
 
             // zoom lane
             for z in tl.zooms {
-                let r = NSRect(x: x(z.start), y: laneGap * 2 + laneHeight,
+                let r = NSRect(x: x(z.start), y: filmstripHeight + laneGap * 2 + laneHeight,
                                width: max(2, x(z.end) - x(z.start)), height: laneHeight)
                 NSColor(calibratedRed: 0.85, green: 0.42, blue: 0.24, alpha: 0.85).setFill()
                 NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 0),
@@ -126,8 +157,92 @@ public final class TimelineView: NSView {
         s.draw(at: NSPoint(x: r.minX + 6, y: r.minY + 6), withAttributes: attrs)
     }
 
-    public override func mouseDown(with event: NSEvent) { seek(event) }
-    public override func mouseDragged(with event: NSEvent) { seek(event) }
+    public override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let i = sceneHandle(near: p) { dragging = i; return }
+        // Double-click on the scenes lane adds a handover there.
+        if event.clickCount == 2, isInSceneLane(p) {
+            onAddScene?(time(at: p))
+            return
+        }
+        dragging = nil
+        seek(event)
+    }
+
+    public override func mouseDragged(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let i = dragging {
+            onMoveScene?(i, time(at: p))
+            return
+        }
+        seek(event)
+    }
+
+    public override func mouseUp(with event: NSEvent) { dragging = nil }
+
+    public override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let tl = timeline, duration > 0 else { return }
+        let scenes = tl.scenes.sorted { $0.at < $1.at }
+        for (i, sc) in scenes.enumerated() where i > 0 {
+            let x = trackX(sc.at)
+            addCursorRect(NSRect(x: x - 5, y: filmstripHeight + laneGap,
+                                 width: 10, height: laneHeight),
+                          cursor: .resizeLeftRight)
+        }
+    }
+
+    private func isInSceneLane(_ p: NSPoint) -> Bool {
+        p.y >= filmstripHeight + laneGap && p.y <= filmstripHeight + laneGap + laneHeight
+    }
+
+    private func trackX(_ t: Double) -> CGFloat {
+        let track = bounds.width - labelInset - 8
+        return labelInset + track * CGFloat(min(max(t / max(duration, 0.001), 0), 1))
+    }
+
+    private func time(at p: NSPoint) -> Double {
+        let track = bounds.width - labelInset - 8
+        return min(max(Double((p.x - labelInset) / max(track, 1)), 0), 1) * duration
+    }
+
+    private func sceneHandle(near p: NSPoint) -> Int? {
+        guard let tl = timeline, isInSceneLane(p) else { return nil }
+        let scenes = tl.scenes.sorted { $0.at < $1.at }
+        for (i, sc) in scenes.enumerated() where i > 0 {
+            if abs(trackX(sc.at) - p.x) < 7 { return i }
+        }
+        return nil
+    }
+
+    /// Decodes a handful of frames in the background. Cheap enough to redo on
+    /// load, and it makes finding a moment far quicker than scrubbing.
+    public func loadThumbnails(from url: URL, count: Int = 12) {
+        thumbnailTask?.cancel()
+        thumbnails = []
+        let total = duration
+        guard total > 0 else { return }
+        thumbnailTask = Task { [weak self] in
+            let asset = AVURLAsset(url: url)
+            let gen = AVAssetImageGenerator(asset: asset)
+            gen.appliesPreferredTrackTransform = true
+            gen.maximumSize = CGSize(width: 220, height: 140)
+            gen.requestedTimeToleranceBefore = CMTime(seconds: 0.4, preferredTimescale: 600)
+            gen.requestedTimeToleranceAfter = CMTime(seconds: 0.4, preferredTimescale: 600)
+            for i in 0..<count {
+                if Task.isCancelled { return }
+                let t = total * Double(i) / Double(count)
+                guard let (img, _) = try? await gen.image(
+                    at: CMTime(seconds: t, preferredTimescale: 600)) else { continue }
+                let image = NSImage(cgImage: img,
+                                    size: NSSize(width: img.width, height: img.height))
+                await MainActor.run {
+                    self?.thumbnails.append((t, image))
+                    self?.needsDisplay = true
+                }
+            }
+        }
+    }
 
     private func seek(_ event: NSEvent) {
         guard duration > 0 else { return }

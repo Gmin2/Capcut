@@ -71,6 +71,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transport.distribution = .fill
 
         timelineView.translatesAutoresizingMaskIntoConstraints = false
+        // Dragging a scene marker rewrites project.json, which the watcher
+        // picks up and reloads. One path for every edit, whether it came from
+        // the UI or from a script.
+        timelineView.onMoveScene = { [weak self] index, t in
+            self?.editProject { p in
+                var scenes = p.scenes.sorted { $0.at < $1.at }
+                guard index > 0, index < scenes.count else { return }
+                let lower = scenes[index - 1].at + 0.2
+                let upper = index + 1 < scenes.count
+                    ? scenes[index + 1].at - 0.2 : Double.greatestFiniteMagnitude
+                scenes[index].at = min(max(t, lower), upper)
+                p.scenes = scenes
+            }
+        }
+
+        timelineView.onAddScene = { [weak self] t in
+            self?.editProject { p in
+                var scenes = p.scenes.sorted { $0.at < $1.at }
+                // Alternate between the two layouts a demo actually switches
+                // between; anything more specific belongs in the JSON.
+                let previous = scenes.last(where: { $0.at <= t })?.layout ?? "screenOnly"
+                let next = previous == "demo" ? "talkingHead" : "demo"
+                scenes.append(Scene(at: t, layout: next, transition: 0.6))
+                p.scenes = scenes.sorted { $0.at < $1.at }
+            }
+        }
+
         // The strip is in source time, the player is in edited time.
         timelineView.onSeek = { [weak self] sourceT in
             guard let self, let p = self.preview else { return }
@@ -97,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             previewBox.heightAnchor.constraint(equalTo: previewBox.widthAnchor,
                                                multiplier: 9.0 / 16.0),
             timelineView.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
-            timelineView.heightAnchor.constraint(equalToConstant: 70),
+            timelineView.heightAnchor.constraint(equalToConstant: 108),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 110),
         ])
@@ -124,6 +151,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         reload()
         handleTriggers()
+    }
+
+    /// Read, mutate, write. The file stays the single source of truth, so a UI
+    /// edit and a scripted edit are the same operation.
+    private func editProject(_ change: (inout Project) -> Void) {
+        guard var p = Project.load(from: recordingDir) else { return }
+        change(&p)
+        try? p.write(to: recordingDir)
+        reload()
     }
 
     private func button(_ title: String, _ action: Selector) -> NSButton {
@@ -181,6 +217,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // playhead is mapped in from edited time.
         timelineView.duration = m.screen.duration
         timelineView.timeline = tl
+        timelineView.loadThumbnails(
+            from: recordingDir.appendingPathComponent(m.screen.file))
+        timelineView.window?.invalidateCursorRects(for: timelineView)
         preview?.load(recordingDir: recordingDir, outputSize: outputSize,
                       timeline: tl, screenSize: screenSize, webcamSize: webcamSize)
         Log.line(String(format: "loaded %.2fs  screen %.0fx%.0f  webcam %@  %d scenes  %d zooms  %d vo lines",
@@ -383,7 +422,10 @@ public func cutaway_main() {
         // parent shell instead, and it is denied. Relaunching through the
         // bundle with `open` fixes attribution; the child writes its result to
         // a pipe file so the CLI can still print it.
-        if CLI.needsAppLaunch(args), ProcessInfo.processInfo.environment["CUTAWAY_CHILD"] == nil {
+        // The marker is an argument, not an environment variable: `open` does
+        // not reliably pass the environment through LaunchServices, and a lost
+        // marker means the child relaunches itself forever.
+        if CLI.needsAppLaunch(args), !args.contains(CLI.childMarker) {
             exit(CLI.relaunchThroughBundle(args))
         }
         let code = runBlocking { await CLI.run(args) }
