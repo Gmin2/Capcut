@@ -18,6 +18,7 @@ public struct Project: Codable {
     /// Kept spans of the recording. Empty means keep everything.
     public var segments: [Segment] = []
     public var cursor = CursorStyle()
+    public var audio = AudioSettings()
     public var voiceover: Voiceover?
 
     public struct Output: Codable {
@@ -30,9 +31,22 @@ public struct Project: Codable {
     public static let filename = "project.json"
 
     public static func load(from dir: URL) -> Project? {
-        guard let d = try? Data(contentsOf: dir.appendingPathComponent(filename)),
-              let p = try? JSONDecoder().decode(Project.self, from: d) else { return nil }
-        return p
+        let url = dir.appendingPathComponent(filename)
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        do {
+            return try JSONDecoder().decode(Project.self, from: d)
+        } catch {
+            // Loud, and deliberately not overwritten: silently replacing a file
+            // someone is editing loses their work.
+            Log.line("project.json is invalid, keeping it and using defaults: \(error)")
+            return nil
+        }
+    }
+
+    /// True when a file is present, whether or not it parses. Used to decide
+    /// if writing a fresh default is safe.
+    public static func exists(in dir: URL) -> Bool {
+        FileManager.default.fileExists(atPath: dir.appendingPathComponent(filename).path)
     }
 
     public func write(to dir: URL) throws {

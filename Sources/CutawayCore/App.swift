@@ -71,9 +71,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transport.distribution = .fill
 
         timelineView.translatesAutoresizingMaskIntoConstraints = false
-        timelineView.onSeek = { [weak self] t in
-            self?.preview?.pause()
-            self?.preview?.seek(to: t)
+        // The strip is in source time, the player is in edited time.
+        timelineView.onSeek = { [weak self] sourceT in
+            guard let self, let p = self.preview else { return }
+            p.pause()
+            p.seek(to: p.outputTime(forSource: sourceT))
         }
 
         let scroll = NSScrollView()
@@ -102,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         preview?.onTimeChange = { [weak self] t in
             guard let self else { return }
-            self.timelineView.playhead = t
+            self.timelineView.playhead = self.preview?.sourceTime ?? t
             self.timeLabel.stringValue = String(format: "%.2f / %.2f",
                                                 t, self.preview?.duration ?? 0)
             self.playButton.title = (self.preview?.isPlaying ?? false) ? "Pause" : "Play"
@@ -175,6 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.reload()
             }
         }
+        // The strip is drawn in source time so cut spans stay visible; the
+        // playhead is mapped in from edited time.
         timelineView.duration = m.screen.duration
         timelineView.timeline = tl
         preview?.load(recordingDir: recordingDir, outputSize: outputSize,

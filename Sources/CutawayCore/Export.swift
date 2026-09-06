@@ -94,14 +94,29 @@ public enum Export {
         var voiceDuration = 0.0
         if let vo = project.voiceover, !vo.lines.isEmpty {
             let u = recordingDir.appendingPathComponent("voiceover.m4a")
+            // Narration is authored against the edited timeline, so it is
+            // rendered to the post-cut duration, not the raw one.
+            let editedForVoice = tl.timeMap.outputDuration > 0
+                ? tl.timeMap.outputDuration : duration
             voiceDuration = (try? await VoiceoverRenderer.render(
-                vo, duration: duration, to: u)) ?? 0
+                vo, duration: editedForVoice, to: u)) ?? 0
             if voiceDuration > 0 { voiceURL = u }
         }
         // Cuts shorten the video; narration can lengthen it again.
         let editedDuration = tl.timeMap.outputDuration > 0
             ? tl.timeMap.outputDuration : duration
         let renderDuration = max(editedDuration, voiceDuration)
+
+        // Recorded voice and system sound, retimed through the same cuts as
+        // the picture, then mixed with any narration.
+        let manifestForAudio = manifest ?? Manifest(
+            screen: .init(file: screenFile, pixelSize: [screen.size.width, screen.size.height],
+                          offset: 0, duration: duration, frames: 0), webcam: nil)
+        let mixURL = try? await AudioMix.build(
+            recordingDir: recordingDir, manifest: manifestForAudio,
+            timeMap: tl.timeMap, settings: project.audio,
+            voiceover: voiceURL, outputDuration: renderDuration,
+            to: recordingDir.appendingPathComponent("mix.m4a"))
         let state = RenderState(screenSize: screen.size, webcamSize: webcam?.size,
                                 outputSize: outputSize, timeline: tl)
         let engine = try RenderEngine()
@@ -109,7 +124,7 @@ public enum Export {
         // Video first, audio muxed after. Feeding an audio input only once the
         // video is done makes AVAssetWriter stall waiting to interleave, so the
         // two are kept in separate passes.
-        let videoURL = voiceURL == nil ? url
+        let videoURL = mixURL == nil ? url
             : url.deletingLastPathComponent()
                  .appendingPathComponent("." + url.lastPathComponent + ".video.mp4")
         try? FileManager.default.removeItem(at: url)
@@ -177,8 +192,8 @@ public enum Export {
             }
         }
         await writer.finishWriting()
-        if let voiceURL {
-            try await mux(video: videoURL, audio: voiceURL, to: url)
+        if let mixURL {
+            try await mux(video: videoURL, audio: mixURL, to: url)
             try? FileManager.default.removeItem(at: videoURL)
         }
 
@@ -189,7 +204,8 @@ public enum Export {
           \(String(format: "%.1f", Double(size) / 1_048_576)) MB, \
           webcam=\(webcam != nil ? "yes" : "no"), \
           segments=\(tl.timeMap.segments.count) (\(String(format: "%.2f", duration))s -> \(String(format: "%.2f", editedDuration))s), \
-          audio=\(voiceURL != nil ? String(format: "%.1fs", voiceDuration) : "none"), \
+          audio=\(mixURL != nil ? "mixed" : "none")\
+          \(voiceURL != nil ? String(format: " (vo %.1fs)", voiceDuration) : ""), \
           writer=\(writer.status.rawValue) \
           \(writer.error.map { "err=\($0.localizedDescription)" } ?? "")
           """)
@@ -206,6 +222,7 @@ public enum Export {
                                       offset: 0, duration: duration, frames: 0),
                         webcam: nil)
         let p = Project.makeDefault(recordingDir: recordingDir, manifest: manifest)
+        if Project.exists(in: recordingDir) { return p }
         try? p.write(to: recordingDir)
         Log.line("wrote default \(Project.filename)")
         return p
