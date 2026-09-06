@@ -23,7 +23,14 @@ public struct Manifest: Codable {
 
     public static func load(from url: URL) -> Manifest? {
         guard let d = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(Manifest.self, from: d)
+        do {
+            return try JSONDecoder().decode(Manifest.self, from: d)
+        } catch {
+            // A present-but-unreadable manifest is a different problem from an
+            // absent one, and the difference matters when nothing plays.
+            Log.line("recording.json is unreadable: \(error)")
+            return nil
+        }
     }
 
     public func write(to url: URL) throws {

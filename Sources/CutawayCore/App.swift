@@ -234,7 +234,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func editProject(_ change: (inout Project) -> Void) {
         guard var p = Project.load(from: recordingDir) else { return }
         change(&p)
-        try? p.write(to: recordingDir)
+        do {
+            try p.write(to: recordingDir)
+        } catch {
+            // Losing an edit silently is the worst failure here: the timeline
+            // would snap back with no explanation.
+            Log.line("could not save the edit: \(error.localizedDescription)")
+            return
+        }
         reload()
     }
 

@@ -177,7 +177,11 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         isRecording = false
 
         let endPTS = clock.adjusted(RecordClock.now())
-        try? await stream.stopCapture()
+        do {
+            try await stream.stopCapture()
+        } catch {
+            Log.line("capture did not stop cleanly: \(error.localizedDescription)")
+        }
         input.markAsFinished()
         await writer.finishWriting()
 

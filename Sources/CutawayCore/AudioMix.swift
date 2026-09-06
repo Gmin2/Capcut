@@ -73,7 +73,18 @@ public enum AudioMix {
         var mixedAny = false
 
         for src in sources {
-            guard let mono = try? await decodeMono(src.url, format: format) else { continue }
+            let mono: [Float]
+            do {
+                mono = try await decodeMono(src.url, format: format)
+            } catch {
+                Log.line("audio: could not read \(src.url.lastPathComponent): "
+                         + error.localizedDescription)
+                continue
+            }
+            guard !mono.isEmpty else {
+                Log.line("audio: \(src.url.lastPathComponent) decoded to silence")
+                continue
+            }
             let isVoice = src.inEditedTime
 
             if isVoice {

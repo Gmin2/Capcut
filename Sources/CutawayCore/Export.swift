@@ -252,8 +252,12 @@ public enum Export {
                         webcam: nil)
         let p = Project.makeDefault(recordingDir: recordingDir, manifest: manifest)
         if Project.exists(in: recordingDir) { return p }
-        try? p.write(to: recordingDir)
-        Log.line("wrote default \(Project.filename)")
+        do {
+            try p.write(to: recordingDir)
+            Log.line("wrote default \(Project.filename)")
+        } catch {
+            Log.line("could not write \(Project.filename): \(error.localizedDescription)")
+        }
         return p
     }
 
