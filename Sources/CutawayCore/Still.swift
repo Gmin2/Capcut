@@ -39,7 +39,8 @@ public enum Still {
             duration: manifest?.screen.duration ?? 0,
             hasWebcam: manifest?.webcam != nil)
             .timeline(sourceSize: screenSize, events: Events.load(from: recordingDir),
-                      sourceDuration: manifest?.screen.duration ?? 0)
+                      sourceDuration: manifest?.screen.duration ?? 0,
+                      transcript: Transcript.load(from: recordingDir))
         if let override = preset?.layoutOverride {
             tl.layouts = Layout.named.merging(override) { _, new in new }
         }
@@ -63,6 +64,10 @@ public enum Still {
         if let c = engine.calloutDraw(f, theme: tl.calloutTheme,
                                       outputSize: outputSize) {
             layers.append(c)
+        }
+        if let cap = engine.captionDraw(f, timeline: tl,
+                                        outputSize: outputSize) {
+            layers.append(cap)
         }
         let layerCount = layers.count
 

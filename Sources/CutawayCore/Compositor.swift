@@ -33,6 +33,17 @@ public extension RenderEngine {
     /// Shared placement for anything already drawn as a finished bitmap: the
     /// rounding, border and shadow are baked in, so the shader must not add
     /// its own.
+    func captionDraw(_ f: FrameDescription, timeline: Timeline,
+                     outputSize: CGSize) -> Draw? {
+        guard let c = f.caption, let held = timeline.captionForFrame,
+              let tex = captionTexture(held.cue, spoken: held.spoken, id: c.id,
+                                       size: c.rect.size, style: timeline.captionStyle,
+                                       outputHeight: outputSize.height)
+        else { return nil }
+        return Draw(texture: tex, params: overlayParams(rect: c.rect, opacity: 1,
+                                                        outputSize: outputSize))
+    }
+
     func overlayParams(rect: CGRect, opacity: Double, outputSize: CGSize) -> LayerParams {
         var p = LayerParams()
         p.outputSize = SIMD2(Float(outputSize.width), Float(outputSize.height))

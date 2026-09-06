@@ -27,6 +27,7 @@ public struct Project: Codable {
     public var keycast = KeycastStyle()
     public var callouts: [Callout] = []
     public var calloutTheme = CalloutTheme()
+    public var captions = CaptionStyle()
     /// "none", "macWindow" or "browser", drawn around the screen layer.
     public var deviceFrame: DeviceFrame = .none
     public var masks: [Mask] = []
@@ -74,6 +75,7 @@ public struct Project: Codable {
         keycast = get(.keycast, KeycastStyle())
         callouts = get(.callouts, [])
         calloutTheme = get(.calloutTheme, CalloutTheme())
+        captions = get(.captions, CaptionStyle())
         deviceFrame = get(.deviceFrame, DeviceFrame.none)
         masks = get(.masks, [])
         motionBlur = get(.motionBlur, 0.85)
@@ -181,7 +183,8 @@ public struct Project: Codable {
     }
 
     public func timeline(sourceSize: CGSize, events: Events,
-                         sourceDuration: Double = 0) -> Timeline {
+                         sourceDuration: Double = 0,
+                         transcript: Transcript? = nil) -> Timeline {
         let tl = Timeline(zooms: zooms, sourceSize: sourceSize, cursor: events.cursor)
         tl.scenes = scenes.isEmpty ? [Scene(at: 0, layout: "screenOnly")] : scenes
         tl.style = style
@@ -191,6 +194,8 @@ public struct Project: Codable {
         tl.setKeys(events.keys)
         tl.callouts = callouts
         tl.calloutTheme = calloutTheme
+        tl.captionStyle = captions
+        tl.setTranscript(transcript)
         tl.deviceFrame = deviceFrame
         tl.masks = masks
         tl.motionBlur = motionBlur

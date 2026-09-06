@@ -18,12 +18,18 @@ public enum Log {
     /// stdout clean for the actual result.
     nonisolated(unsafe) public static var toStdout = false
 
+    /// Set when running as a relaunched child, whose stderr nobody is reading.
+    /// Without this every diagnostic from a capture command is lost, which is
+    /// how an empty transcript looked like a successful one.
+    nonisolated(unsafe) public static var mirrorTo: ((String) -> Void)?
+
     public static func line(_ s: String) {
         if toStdout {
             FileHandle.standardError.write(Data((s + "\n").utf8))
         } else {
             print(s)
         }
+        mirrorTo?(s)
         sink?(s)
         guard !toStdout else { return }
         lock.lock(); buffer += s + "\n"; lock.unlock()

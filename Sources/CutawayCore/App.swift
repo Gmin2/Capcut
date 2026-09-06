@@ -285,7 +285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                  hasWebcam: m.webcam != nil)
         let tl = project.timeline(sourceSize: screenSize,
                                   events: Events.load(from: recordingDir),
-                                  sourceDuration: m.screen.duration)
+                                  sourceDuration: m.screen.duration,
+                                  transcript: Transcript.load(from: recordingDir))
 
         // Live-reload the edit when project.json changes on disk, so an
         // external editor (or Claude) rewriting it updates the preview.

@@ -28,6 +28,7 @@ public enum CLI {
             case "snap":     return try await snap(args)
             case "doctor":   return await doctor()
             case "pitch":    return try pitch(args)
+            case "transcribe": return try await transcribe(args)
             case "pack":     return try pack(args)
             case "trim":     return try trim(args)
             case "windows":  return try await windows()
@@ -50,7 +51,8 @@ public enum CLI {
     static let childMarker = "--cutaway-child"
 
     static func needsAppLaunch(_ args: [String]) -> Bool {
-        ["record", "snap", "doctor", "windows", "displays"].contains(args.first ?? "")
+        ["record", "snap", "doctor", "windows", "displays", "transcribe"]
+            .contains(args.first ?? "")
     }
 
     /// Runs this same bundle as an app and forwards its output.
@@ -83,12 +85,14 @@ public enum CLI {
             return 1
         }
 
+        // Diagnostics stream in before the result, so the wait ends on a line
+        // that is not a diagnostic rather than on the first byte written.
         let deadline = Date().addingTimeInterval(timeout)
         var text = ""
         while Date() < deadline {
             if let t = try? String(contentsOf: outFile, encoding: .utf8), !t.isEmpty {
-                text = t
-                break
+                let hasResult = t.split(separator: "\n").contains { !$0.hasPrefix("·") }
+                if hasResult { text = t; break }
             }
             Thread.sleep(forTimeInterval: 0.15)
         }
@@ -112,11 +116,23 @@ public enum CLI {
 
     /// Picked up on launch when the CLI asked the app to do something. Returns
     /// the command to run, having consumed the request.
+    /// Diagnostics from a relaunched child, prefixed so the caller can tell
+    /// them apart from the command's actual result.
+    static func mirrorLogs() {
+        Log.mirrorTo = { line in
+            guard let path = outPath, let h = FileHandle(forWritingAtPath: path) else { return }
+            h.seekToEndOfFile()
+            h.write(Data(("· " + line + "\n").utf8))
+            try? h.close()
+        }
+    }
+
     public static func takePendingRequest() -> [String]? {
         guard let data = try? Data(contentsOf: pendingURL),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let args = obj["args"] as? [String] else { return nil }
         outPath = obj["out"] as? String
+        mirrorLogs()
         try? FileManager.default.removeItem(at: pendingURL)
         return args
     }
@@ -167,6 +183,11 @@ public enum CLI {
           pitch --name "Your Name" --role "Your Role" [--in DIR]
               Rewrites project.json as a pitch video: webcam opening, handover
               to the screen, lower third, auto zooms, device frame.
+
+          transcribe [--in DIR] [--audio FILE]
+              Transcribes the narration and writes transcript.json. Runs
+              automatically after recording with a microphone; use this to
+              redo it, or to caption a synthesised voiceover.
 
           doctor
               Checks every permission and dependency, and says how to fix
@@ -401,6 +422,29 @@ public enum CLI {
         Log.line("pitch template: \(p.scenes.count) scenes, \(p.zooms.count) zooms, "
                  + "\(p.callouts.count) callouts")
         emit(dir.appendingPathComponent(Project.filename).path)
+        return 0
+    }
+
+    static func transcribe(_ args: [String]) async throws -> Int32 {
+        let opts = Options(args)
+        let dir = opts.url("--in") ?? defaultDir
+        let manifest = Manifest.load(from: dir.appendingPathComponent("recording.json"))
+
+        // Prefer the real voice; fall back to synthesised narration, which is
+        // what you caption when the video is narrated rather than spoken.
+        let audio = opts.url("--audio")
+            ?? manifest?.mic.map { dir.appendingPathComponent($0.file) }
+            ?? [dir.appendingPathComponent("voiceover.m4a"),
+                dir.appendingPathComponent("mix.m4a")]
+                .first { FileManager.default.fileExists(atPath: $0.path) }
+        guard let audio else {
+            FileHandle.standardError.write(Data("no audio to transcribe in \(dir.path)\n".utf8))
+            return 1
+        }
+        let offset = manifest?.mic?.offset ?? 0
+        let t = try await Transcriber.run(audio: audio, offset: offset)
+        try t.write(to: dir)
+        emit(dir.appendingPathComponent("transcript.json").path)
         return 0
     }
 

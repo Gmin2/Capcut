@@ -18,6 +18,7 @@ public final class RenderEngine {
     private var cursorTexture: MTLTexture?
     private var keycastCache: (text: String, height: Int, texture: MTLTexture)?
     private var calloutCache: (id: String, texture: MTLTexture)?
+    private var captionCache: (id: String, texture: MTLTexture)?
     /// Set when the background needs its own image. A blurred backdrop uses the
     /// screen layer's texture instead, which costs nothing extra.
     public var backgroundTexture: MTLTexture?
@@ -130,6 +131,16 @@ public final class RenderEngine {
                                              outputHeight: outputHeight),
               let tex = try? makeTexture(from: img) else { return nil }
         calloutCache = (id, tex)
+        return tex
+    }
+
+    func captionTexture(_ cue: Cue, spoken: Int, id: String, size: CGSize,
+                        style: CaptionStyle, outputHeight: CGFloat) -> MTLTexture? {
+        if let c = captionCache, c.id == id { return c.texture }
+        guard let img = CaptionRenderer.draw(cue, spokenIndex: spoken, style: style,
+                                             size: size, outputHeight: outputHeight),
+              let tex = try? makeTexture(from: img) else { return nil }
+        captionCache = (id, tex)
         return tex
     }
 

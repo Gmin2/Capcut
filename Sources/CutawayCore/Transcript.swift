@@ -112,11 +112,22 @@ public enum Transcriber {
 
         var t = Transcript()
         t.text = result.bestTranscription.formattedString
-        t.segments = result.bestTranscription.segments.map {
+        t.segments = result.bestTranscription.segments.filter {
+            !$0.substring.trimmingCharacters(in: .whitespaces).isEmpty
+        }.map {
             Transcript.Segment(t: $0.timestamp + offset,
                                duration: $0.duration,
                                text: $0.substring,
                                confidence: Double($0.confidence))
+        }
+        // An empty result is a silent failure: the file plays fine, the
+        // recogniser just heard nothing. Worth saying so rather than writing an
+        // empty transcript that looks like a successful one.
+        if t.text.isEmpty {
+            Log.line("transcript: recogniser returned nothing for "
+                     + "\(audio.lastPathComponent). On-device models can fail on "
+                     + "synthesised speech; try a real recording, or check "
+                     + "Settings > General > Language & Region for a downloaded language.")
         }
         Log.line("transcript: \(t.segments.count) segments, on-device=\(request.requiresOnDeviceRecognition)")
         if !t.text.isEmpty {

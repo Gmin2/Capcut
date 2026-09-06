@@ -84,6 +84,7 @@ public struct FrameDescription {
     /// drawing it is CPU work that should only happen when the text changes.
     public var keycast: (text: String, opacity: Double, rect: CGRect)?
     public var callout: (id: String, opacity: Double, rect: CGRect, callout: Callout)?
+    public var caption: (id: String, rect: CGRect)?
 }
 
 public final class Timeline: @unchecked Sendable {
@@ -98,12 +99,23 @@ public final class Timeline: @unchecked Sendable {
     public var keycastStyle = KeycastStyle()
     public var callouts: [Callout] = []
     public var calloutTheme = CalloutTheme()
+    public var captionStyle = CaptionStyle()
+    private var cues: [Cue] = []
+
+    public func setTranscript(_ t: Transcript?) {
+        guard let t, captionStyle.enabled else { cues = []; return }
+        cues = CaptionRenderer.cues(from: t, style: captionStyle)
+    }
     public var deviceFrame: DeviceFrame = .none
     public var masks: [Mask] = []
     /// 0 disables motion blur. 1 is roughly a 180-degree shutter, which is what
     /// film looks like; above that reads as smeary.
     public var motionBlur: Double = 0.85
     private var keyChips: [KeyChip] = []
+
+    /// The cue behind the last evaluated frame, so the caller can draw it
+    /// without re-resolving. Single-threaded per render pass by construction.
+    nonisolated(unsafe) private(set) var captionForFrame: (cue: Cue, spoken: Int)?
 
     public func setKeys(_ keys: [EventRecorder.Key]) {
         keyChips = KeycastBuilder.chips(from: keys, style: keycastStyle)
@@ -334,6 +346,17 @@ public final class Timeline: @unchecked Sendable {
         if let c = CalloutRenderer.resolve(callouts, at: t, theme: calloutTheme,
                                            outputSize: outputSize) {
             f.callout = (c.id, c.opacity, CGRect(origin: c.origin, size: c.size), c.callout)
+        }
+        if let hit = CaptionRenderer.active(cues, at: t) {
+            let size = CaptionRenderer.measure(hit.cue, style: captionStyle,
+                                               outputSize: outputSize)
+            let y = outputSize.height * (1 - captionStyle.bottomMargin) - size.height
+            f.caption = ("\(hit.cue.text)|\(hit.spokenIndex)|\(Int(outputSize.height))",
+                         CGRect(x: (outputSize.width - size.width) / 2, y: y,
+                                width: size.width, height: size.height))
+            captionForFrame = (hit.cue, hit.spokenIndex)
+        } else {
+            captionForFrame = nil
         }
         return f
     }

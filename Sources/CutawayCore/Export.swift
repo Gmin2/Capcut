@@ -96,7 +96,8 @@ public enum Export {
                                           hasWebcam: webcam != nil)
         let tl = timeline ?? project.timeline(
             sourceSize: screen.size, events: Events.load(from: recordingDir),
-            sourceDuration: duration)
+            sourceDuration: duration,
+            transcript: Transcript.load(from: recordingDir))
         if let override = preset.layoutOverride {
             tl.layouts = Layout.named.merging(override) { _, new in new }
         }
@@ -195,6 +196,10 @@ public enum Export {
                     if let c = engine.calloutDraw(f, theme: tl.calloutTheme,
                                                   outputSize: outputSize) {
                         layers.append(c)
+                    }
+                    if let cap = engine.captionDraw(f, timeline: tl,
+                                                    outputSize: outputSize) {
+                        layers.append(cap)
                     }
 
                     guard let pool = adaptor.pixelBufferPool else { continue }

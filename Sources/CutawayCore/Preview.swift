@@ -191,6 +191,10 @@ public final class PreviewController: NSObject, MTKViewDelegate {
                                       outputSize: state.outputSize) {
             layers.append(c)
         }
+        if let cap = engine.captionDraw(f, timeline: state.timeline,
+                                        outputSize: state.outputSize) {
+            layers.append(cap)
+        }
 
         engine.draw(background: f.background, layers: layers, cursor: f.cursor,
                     into: drawable.texture, present: drawable)

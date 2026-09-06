@@ -139,6 +139,7 @@ the edit change as you write it.
 | `trimStart` / `trimEnd` | top and tail, in source seconds; `trimEnd` omitted runs to the end |
 | `voiceover` | `{engine, voice, rate, lines: [{at, text}]}`, synthesised on device |
 | `cursor` | `{visible, scale, smoothing, clickRipple, rippleRadius}` |
+| `captions` | `{enabled, wordsPerCue, fontSize, highlightSpoken, highlight, bottomMargin}` |
 | `keycast` | `{visible, position, holdFor, mergeWindow, maxChips, fontSize}` |
 | `audio` | `{mic, system, voiceover, duckSystemUnderVoice}` |
 | `style.background` | `{from, to, angle}` |
@@ -183,6 +184,19 @@ event and the letter is not.
 Masks are in source coordinates, so a hidden region stays on the thing it hides
 while the camera zooms and pans. Window exclusion at capture time is still
 better where you know in advance.
+
+## Captions
+
+    cutaway transcribe --in DIR      # writes transcript.json
+    # then set captions.enabled in project.json
+
+Built from the word timestamps already in `transcript.json`, with the spoken
+word highlighted as it is said. Most demo videos are watched on mute, so this
+does more for reach than any visual effect.
+
+Transcription runs on device. It is reliable on real speech and unreliable on
+synthesised narration, which it sometimes hears as nothing at all -- the command
+says so rather than writing an empty transcript that looks successful.
 
 ## Backgrounds
 
