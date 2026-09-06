@@ -1,5 +1,29 @@
 # Driving Cutaway from a script
 
+## Recording a clean take
+
+Start and stop with the global hotkeys so the Cutaway window is never in shot:
+
+| | |
+|---|---|
+| `⌘⇧8` | start / stop recording |
+| `⌘⇧9` | pause / resume |
+
+The window hides itself and a 3 second countdown runs before capture begins, so
+you have time to get to the right app. Put `0` in
+`~/Library/Application Support/Cutaway/countdown` to disable it.
+
+## Keeping things out of shot
+
+    cutaway windows                                  # find bundle ids
+    cutaway record --exclude com.brave.Browser,notion.id
+    cutaway record --only com.apple.Terminal
+
+`--exclude` keeps an app's windows out of the capture entirely: the pixels never
+exist, so there is nothing to leak even if you share the raw file. `--only`
+captures a single app instead of the whole display. Both beat masking after the
+fact, which is only for what you did not think of in advance.
+
 ## Start here
 
     cutaway doctor

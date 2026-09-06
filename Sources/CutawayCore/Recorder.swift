@@ -36,6 +36,13 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Keystroke overlay. Needs Input Monitoring, so it stays off by default.
     public var captureKeys = false
 
+    /// Bundle ids whose windows are kept out of the capture entirely. Better
+    /// than masking afterwards: the pixels never exist, so there is nothing to
+    /// leak if the raw file is shared.
+    public var excludeApps: [String] = []
+    /// Capture just this app's windows instead of the whole display.
+    public var onlyApp: String?
+
     public private(set) var isRecording = false
     public var isPaused: Bool { clock.isPaused }
     /// Recorded seconds so far, paused time excluded.
@@ -94,7 +101,8 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         config.capturesAudio = captureSystemAudio
         config.captureMicrophone = captureMicrophone
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let filter = Recorder.makeFilter(display: display, content: content,
+                                         excludeApps: excludeApps, onlyApp: onlyApp)
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         if captureSystemAudio {
@@ -254,6 +262,36 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
         Log.line("stream stopped with error: \(error)")
+    }
+
+    /// Builds the capture filter. Exclusion is matched on bundle id rather
+    /// than window id, because window ids change every launch and a bundle id
+    /// is something a person or a script can actually name.
+    static func makeFilter(display: SCDisplay, content: SCShareableContent,
+                           excludeApps: [String], onlyApp: String?) -> SCContentFilter {
+        if let only = onlyApp {
+            let windows = content.windows.filter {
+                $0.owningApplication?.bundleIdentifier == only
+            }
+            if !windows.isEmpty {
+                Log.line("capturing only \(only) (\(windows.count) windows)")
+                return SCContentFilter(display: display,
+                                       including: windows)
+            }
+            Log.line("no windows for \(only), capturing the whole display")
+        }
+
+        guard !excludeApps.isEmpty else {
+            return SCContentFilter(display: display, excludingWindows: [])
+        }
+        let hidden = content.windows.filter {
+            guard let id = $0.owningApplication?.bundleIdentifier else { return false }
+            return excludeApps.contains(id)
+        }
+        if !hidden.isEmpty {
+            Log.line("excluding \(hidden.count) window(s) from \(excludeApps.joined(separator: ", "))")
+        }
+        return SCContentFilter(display: display, excludingWindows: hidden)
     }
 
     /// Shifts a sample buffer's timestamps without touching its pixels.

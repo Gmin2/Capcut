@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import AVFoundation
+import ScreenCaptureKit
 
 /// Headless entry points.
 ///
@@ -29,6 +30,7 @@ public enum CLI {
             case "pitch":    return try pitch(args)
             case "pack":     return try pack(args)
             case "trim":     return try trim(args)
+            case "windows":  return try await windows()
             case "voices":   return voices()
             case "help", "--help", "-h": usage(); return 0
             default:
@@ -47,11 +49,16 @@ public enum CLI {
     static let childMarker = "--cutaway-child"
 
     static func needsAppLaunch(_ args: [String]) -> Bool {
-        ["record", "snap", "doctor"].contains(args.first ?? "")
+        ["record", "snap", "doctor", "windows"].contains(args.first ?? "")
     }
 
-    /// Runs this same bundle via `open`, waits, and forwards its output.
-    static func relaunchThroughBundle(_ args: [String]) -> Int32 {
+    /// Runs this same bundle as an app and forwards its output.
+    ///
+    /// The request goes through a file, not through arguments: `open --args`
+    /// silently delivers nothing on this system, and the environment is not
+    /// inherited through LaunchServices either. A file is the only channel that
+    /// actually survives, and it is one we control both ends of.
+    static func relaunchThroughBundle(_ args: [String], timeout: Double = 90) -> Int32 {
         let bundle = URL(fileURLWithPath: CommandLine.arguments[0])
             .deletingLastPathComponent()   // MacOS
             .deletingLastPathComponent()   // Contents
@@ -61,24 +68,56 @@ public enum CLI {
             .appendingPathComponent("cutaway-cli-\(UUID().uuidString).log")
         FileManager.default.createFile(atPath: outFile.path, contents: nil)
 
+        let request: [String: Any] = ["args": args, "out": outFile.path]
+        guard let data = try? JSONSerialization.data(withJSONObject: request) else { return 1 }
+        try? FileManager.default.createDirectory(
+            at: pendingURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: pendingURL)
+
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        p.arguments = ["-W", "-n", "-a", bundle.path, "--args"]
-            + args + [childMarker, "--cli-out", outFile.path]
-
-        do {
-            try p.run()
-            p.waitUntilExit()
-        } catch {
+        p.arguments = ["-n", "-a", bundle.path]
+        do { try p.run() } catch {
             FileHandle.standardError.write(Data("relaunch failed: \(error)\n".utf8))
             return 1
         }
 
-        if let text = try? String(contentsOf: outFile, encoding: .utf8), !text.isEmpty {
-            FileHandle.standardOutput.write(Data(text.utf8))
+        let deadline = Date().addingTimeInterval(timeout)
+        var text = ""
+        while Date() < deadline {
+            if let t = try? String(contentsOf: outFile, encoding: .utf8), !t.isEmpty {
+                text = t
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.15)
         }
+        try? FileManager.default.removeItem(at: pendingURL)
         try? FileManager.default.removeItem(at: outFile)
-        return p.terminationStatus
+
+        guard !text.isEmpty else {
+            FileHandle.standardError.write(Data(
+                "no result from the app after \(Int(timeout))s\n".utf8))
+            return 1
+        }
+        FileHandle.standardOutput.write(Data(text.utf8))
+        return 0
+    }
+
+    static var pendingURL: URL {
+        URL(fileURLWithPath: NSString(
+            string: "~/Library/Application Support/Cutaway/pending.json")
+            .expandingTildeInPath)
+    }
+
+    /// Picked up on launch when the CLI asked the app to do something. Returns
+    /// the command to run, having consumed the request.
+    public static func takePendingRequest() -> [String]? {
+        guard let data = try? Data(contentsOf: pendingURL),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let args = obj["args"] as? [String] else { return nil }
+        outPath = obj["out"] as? String
+        try? FileManager.default.removeItem(at: pendingURL)
+        return args
     }
 
     /// stdout is a pipe file when running as a relaunched child, since a
@@ -100,10 +139,14 @@ public enum CLI {
         cutaway <command>
 
           record [--seconds N] [--out DIR] [--no-webcam] [--no-mic]
-                 [--system-audio] [--keys]
+                 [--system-audio] [--keys] [--countdown N]
+                 [--exclude bundle.id,...] [--only bundle.id]
               Records the screen, then writes display.mov, events.json,
               recording.json, transcript.json and a default project.json.
               --keys logs keystrokes for the overlay; needs Input Monitoring.
+              --exclude keeps an app's windows out of the capture entirely.
+              --only captures just one app instead of the whole display.
+              Use `cutaway windows` to find bundle ids.
 
           export [--in DIR] [--out FILE] [--preset NAME] [--all]
                  [--width N] [--height N] [--fps N]
@@ -138,6 +181,9 @@ public enum CLI {
           snap [--out FILE]
               Screenshots the display through the app's capture grant.
 
+          windows
+              Lists open windows and their bundle ids, for --exclude and --only.
+
           voices
               Lists installed speech voices for project.json voiceover.
 
@@ -158,6 +204,10 @@ public enum CLI {
         r.captureMicrophone = !opts.flag("--no-mic")
         r.captureSystemAudio = opts.flag("--system-audio")
         r.captureKeys = opts.flag("--keys")
+        r.excludeApps = (opts.value("--exclude") ?? "")
+            .split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        r.onlyApp = opts.value("--only")
 
         try await r.start(to: dir.appendingPathComponent("display.mov"))
         // A CLI recording is unattended, so it runs for a fixed span rather
@@ -392,6 +442,20 @@ public enum CLI {
         let freed = try Document.discardMedia(in: dir)
         Log.line(String(format: "freed %.1f MB of raw capture", Double(freed) / 1_048_576))
         emit(dir.path)
+        return 0
+    }
+
+    static func windows() async throws -> Int32 {
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true)
+        var seen = Set<String>()
+        for w in content.windows {
+            guard let app = w.owningApplication,
+                  case let id = app.bundleIdentifier, !id.isEmpty,
+                  w.frame.width > 120, w.frame.height > 80 else { continue }
+            guard seen.insert(id).inserted else { continue }
+            emit("\(id.padding(toLength: 40, withPad: " ", startingAt: 0))\(app.applicationName)")
+        }
         return 0
     }
 

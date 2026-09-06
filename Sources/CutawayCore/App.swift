@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pauseButton: NSButton!
     private var recordLabel = NSTextField(labelWithString: "")
     private var tick: Timer?
+    private var hotkey: Hotkey?
+    private var countdown = Countdown()
 
     func applicationDidFinishLaunching(_ note: Notification) {
         window = NSWindow(
@@ -144,6 +146,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
+        // Registered before anything else so a take can be started and stopped
+        // without ever touching this window, which would otherwise be in shot.
+        let hk = Hotkey()
+        let gotRecord = hk.register(.record) { [weak self] in self?.toggleRecord() }
+        hk.register(.pause) { [weak self] in self?.togglePause() }
+        hotkey = hk
+        if gotRecord {
+            Log.line("hotkeys: \(Hotkey.Combo.record.label) record/stop, "
+                     + "\(Hotkey.Combo.pause.label) pause")
+        }
+
         let voices = VoiceoverRenderer.availableVoices()
         let premium = voices.filter { $0.quality != "default" }
         Log.line("voices: \(voices.count) english, \(premium.count) enhanced/premium")
@@ -238,6 +251,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let r = recorder, r.isRecording { stopRecording(r); return }
         preview?.pause()
 
+        // Hide first, then count down, so the window is out of shot before the
+        // first frame rather than being cut out afterwards.
+        window.orderOut(nil)
+        countdown.run(from: countdownSeconds) { [weak self] in
+            self?.beginRecording()
+        }
+    }
+
+    /// 0 disables the countdown, for scripted runs where nobody is watching.
+    private var countdownSeconds: Int {
+        let p = NSString(string: "~/Library/Application Support/Cutaway/countdown")
+            .expandingTildeInPath
+        if let s = try? String(contentsOfFile: p, encoding: .utf8),
+           let v = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) { return v }
+        return 3
+    }
+
+    private func beginRecording() {
         let r = Recorder()
         let sup = NSString(string: "~/Library/Application Support/Cutaway")
             .expandingTildeInPath
@@ -266,6 +297,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func stopRecording(_ r: Recorder) {
         stopTick()
+        // Bring the editor back so the result is right there when it lands.
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         Task {
             do {
                 _ = try await r.stop()
@@ -417,6 +451,12 @@ public func cutaway_main() {
     // Arguments mean headless. Same bundle either way, which matters because
     // the screen-recording grant is attached to this bundle's identity: a
     // separate CLI binary would need its own.
+    // A request left by the CLI takes priority: this launch exists to serve it.
+    if let pending = CLI.takePendingRequest() {
+        Log.toStdout = true
+        exit(runBlocking { await CLI.run(pending) })
+    }
+
     let args = Array(CommandLine.arguments.dropFirst())
         .filter { !$0.hasPrefix("-psn") }
     if !args.isEmpty {
@@ -426,13 +466,19 @@ public func cutaway_main() {
         // parent shell instead, and it is denied. Relaunching through the
         // bundle with `open` fixes attribution; the child writes its result to
         // a pipe file so the CLI can still print it.
-        // The marker is an argument, not an environment variable: `open` does
-        // not reliably pass the environment through LaunchServices, and a lost
-        // marker means the child relaunches itself forever.
-        if CLI.needsAppLaunch(args), !args.contains(CLI.childMarker) {
-            exit(CLI.relaunchThroughBundle(args))
+        // Capture needs the app itself to be the responsible process; a direct
+        // exec makes TCC blame the parent shell.
+        if CLI.needsAppLaunch(args) {
+            // Recording runs for its full duration; everything else is quick.
+            let budget: Double = args.first == "record"
+                ? (args.firstIndex(of: "--seconds").flatMap { i in
+                        i + 1 < args.count ? Double(args[i + 1]) : nil } ?? 10) + 60
+                : 60
+            exit(CLI.relaunchThroughBundle(args, timeout: budget))
         }
         let code = runBlocking { await CLI.run(args) }
+        // exit rather than return: a capture session can leave a run loop
+        // source alive, and a CLI that does not quit hangs its caller.
         exit(code)
     }
 
