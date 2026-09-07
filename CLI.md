@@ -49,10 +49,23 @@ exist, so there is nothing to leak even if you share the raw file. `--only`
 captures a single app instead of the whole display. Both beat masking after the
 fact, which is only for what you did not think of in advance.
 
+## Undo
+
+Command-Z and shift-command-Z, or the buttons in the transport. Every edit is a
+whole-file write of project.json, so history is a stack of previous documents
+rather than a set of inverse operations -- undo cannot be wrong, because there
+are no inverses to get wrong.
+
 ## Where things live
 
-Recordings go in `~/Movies/Cutaway/`, with `Latest` as the working one that
-commands default to. Set `CUTAWAY_HOME` to put them somewhere else.
+Each take gets its own dated folder in `~/Movies/Cutaway/`, so recordings
+accumulate rather than overwriting each other. `Latest` is a symlink to the
+newest, which is what commands use when you give no `--in`.
+
+    cutaway list                                  # every take, newest first
+    cutaway record --name "pitch take 3"          # name it yourself
+
+Set `CUTAWAY_HOME` to keep them somewhere else.
 
 ## Tests
 

@@ -329,3 +329,78 @@ final class ProjectDecodingTests: XCTestCase {
         XCTAssertEqual(back.trimStart, 0.5, accuracy: 0.001)
     }
 }
+
+final class HistoryTests: XCTestCase {
+
+    private func project(trim: Double) -> Project {
+        var p = Project()
+        p.trimStart = trim
+        return p
+    }
+
+    func testNothingToUndoInitially() {
+        let h = History()
+        XCTAssertFalse(h.canUndo)
+        XCTAssertNil(h.undo(current: project(trim: 0)))
+    }
+
+    func testUndoReturnsThePreviousState() {
+        let h = History()
+        let first = project(trim: 0)
+        h.record(first)
+        let second = project(trim: 1)
+        guard let back = h.undo(current: second) else { return XCTFail("undo failed") }
+        XCTAssertEqual(back.trimStart, 0, accuracy: 0.001)
+    }
+
+    func testRedoReturnsTheUndoneState() {
+        let h = History()
+        h.record(project(trim: 0))
+        let second = project(trim: 1)
+        guard let back = h.undo(current: second) else { return XCTFail("undo failed") }
+        XCTAssertTrue(h.canRedo)
+        guard let forward = h.redo(current: back) else { return XCTFail("redo failed") }
+        XCTAssertEqual(forward.trimStart, 1, accuracy: 0.001)
+    }
+
+    func testWalkingBackThroughSeveralEdits() {
+        let h = History()
+        for i in 0..<4 { h.record(project(trim: Double(i))) }
+        var current = project(trim: 4)
+        for expected in [3.0, 2.0, 1.0, 0.0] {
+            guard let previous = h.undo(current: current) else {
+                return XCTFail("ran out of history at \(expected)")
+            }
+            XCTAssertEqual(previous.trimStart, expected, accuracy: 0.001)
+            current = previous
+        }
+        XCTAssertFalse(h.canUndo)
+    }
+
+    /// The rule every editor follows: editing after an undo throws away the
+    /// branch you had undone.
+    func testNewEditClearsRedo() {
+        let h = History()
+        h.record(project(trim: 0))
+        _ = h.undo(current: project(trim: 1))
+        XCTAssertTrue(h.canRedo)
+        h.record(project(trim: 5))
+        XCTAssertFalse(h.canRedo)
+    }
+
+    /// Restoring a state must not itself become a step, or undo would toggle
+    /// between two states forever.
+    func testReplayDoesNotRecord() {
+        let h = History()
+        h.record(project(trim: 0))
+        let before = h.depth.undo
+        h.replay { h.record(project(trim: 9)) }
+        XCTAssertEqual(h.depth.undo, before)
+    }
+
+    func testHistoryIsBounded() {
+        let h = History(limit: 3)
+        for i in 0..<10 { h.record(project(trim: Double(i))) }
+        XCTAssertEqual(h.depth.undo, 3, "old steps are dropped rather than grown forever")
+    }
+}

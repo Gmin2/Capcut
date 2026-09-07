@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var countdown = Countdown()
     private let inspector = InspectorView()
     private var statusLabel = Theme.mono("", size: 11)
+    private let history = History()
+    private var undoButton: FlatButton!
+    private var redoButton: FlatButton!
 
     func applicationDidFinishLaunching(_ note: Notification) {
         window = NSWindow(
@@ -77,8 +80,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         recordLabel.textColor = Theme.recording
 
+        undoButton = FlatButton("Undo", target: self, action: #selector(undo))
+        redoButton = FlatButton("Redo", target: self, action: #selector(redo))
+        undoButton.isEnabled = false
+        redoButton.isEnabled = false
+
         let transport = NSStackView(views: [
             playButton, timeLabel, NSView(),
+            undoButton, redoButton, NSView(),
             recordButton, pauseButton, recordLabel, NSView(),
             FlatButton("Reload", target: self, action: #selector(reload)),
             exportButton,
@@ -147,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { self?.statusLabel.stringValue = s }
         }
 
+        installMenu()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -174,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// edit and a scripted edit are the same operation.
     private func editProject(_ change: (inout Project) -> Void) {
         guard var p = Project.load(from: recordingDir) else { return }
+        history.record(p)
         change(&p)
         do {
             try p.write(to: recordingDir)
@@ -183,7 +194,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.line("could not save the edit: \(error.localizedDescription)")
             return
         }
+        refreshHistoryButtons()
         reload()
+    }
+
+    @objc private func undo() {
+        guard let current = Project.load(from: recordingDir),
+              let previous = history.undo(current: current) else { return }
+        history.replay { try? previous.write(to: recordingDir) }
+        refreshHistoryButtons()
+        reload()
+        Log.line("undo")
+    }
+
+    @objc private func redo() {
+        guard let current = Project.load(from: recordingDir),
+              let next = history.redo(current: current) else { return }
+        history.replay { try? next.write(to: recordingDir) }
+        refreshHistoryButtons()
+        reload()
+        Log.line("redo")
+    }
+
+    /// A minimal menu, purely so the standard shortcuts work. Nobody reaches
+    /// for an Undo button before they reach for command-Z.
+    private func installMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Quit Cutaway", action: #selector(NSApp.terminate(_:)),
+                        keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: #selector(undo), keyEquivalent: "z")
+        let redoItem = NSMenuItem(title: "Redo", action: #selector(redo),
+                                  keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(redoItem)
+        edit.items.forEach { $0.target = self }
+        editItem.submenu = edit
+        main.addItem(editItem)
+
+        NSApp.mainMenu = main
+    }
+
+    private func refreshHistoryButtons() {
+        undoButton?.isEnabled = history.canUndo
+        redoButton?.isEnabled = history.canRedo
     }
 
     // MARK: actions
@@ -296,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopRecording(_ r: Recorder) {
         stopTick()
         // Bring the editor back so the result is right there when it lands.
+        installMenu()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         Task {

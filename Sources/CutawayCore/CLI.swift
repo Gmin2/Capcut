@@ -33,6 +33,7 @@ public enum CLI {
             case "trim":     return try trim(args)
             case "windows":  return try await windows()
             case "displays": return try await displays()
+            case "list":     return list()
             case "voices":   return voices()
             case "help", "--help", "-h": usage(); return 0
             default:
@@ -155,7 +156,7 @@ public enum CLI {
         print("""
         cutaway <command>
 
-          record [--seconds N] [--out DIR] [--no-webcam] [--no-mic]
+          record [--seconds N] [--out DIR] [--name NAME] [--no-webcam] [--no-mic]
                  [--system-audio] [--keys] [--countdown N]
                  [--exclude bundle.id,...] [--only bundle.id] [--display ID]
               Records the screen, then writes display.mov, events.json,
@@ -210,6 +211,9 @@ public enum CLI {
           displays
               Lists displays and their ids, for --display.
 
+          list
+              Lists recordings, newest first.
+
           voices
               Lists installed speech voices for project.json voiceover.
 
@@ -222,7 +226,9 @@ public enum CLI {
 
     static func record(_ args: [String]) async throws -> Int32 {
         let opts = Options(args)
-        let dir = opts.url("--out") ?? defaultDir
+        // Each take gets its own dated folder; Latest points at the newest so
+        // commands with no --in keep working.
+        let dir = opts.url("--out") ?? Paths.newRecording(named: opts.value("--name"))
         let seconds = opts.double("--seconds") ?? 10
 
         let r = Recorder()
@@ -248,6 +254,7 @@ public enum CLI {
                 screenSize: CGSize(width: m.screen.pixelSize[0], height: m.screen.pixelSize[1]),
                 duration: m.screen.duration, hasWebcam: m.webcam != nil)
         }
+        Paths.linkLatest(to: dir)
         emit(dir.path)
         return 0
     }
@@ -492,6 +499,23 @@ public enum CLI {
         let freed = try Document.discardMedia(in: dir)
         Log.line(String(format: "freed %.1f MB of raw capture", Double(freed) / 1_048_576))
         emit(dir.path)
+        return 0
+    }
+
+    static func list() -> Int32 {
+        let all = Paths.allRecordings()
+        guard !all.isEmpty else {
+            emit("no recordings in \(Paths.recordingsRoot.path)")
+            return 0
+        }
+        for url in all {
+            let m = Manifest.load(from: url.appendingPathComponent("recording.json"))
+            let size = Double(Document.inspect(url).totalBytes) / 1_048_576
+            emit(String(format: "%@  %5.1fs  %6.1f MB",
+                        url.lastPathComponent.padding(toLength: 26, withPad: " ",
+                                                      startingAt: 0),
+                        m?.screen.duration ?? 0, size))
+        }
         return 0
     }
 
