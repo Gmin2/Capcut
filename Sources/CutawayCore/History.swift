@@ -13,6 +13,10 @@ public final class History {
     private let limit: Int
     /// Set while applying an undo, so the resulting save is not itself recorded.
     private var replaying = false
+    /// While a drag is in progress only its starting state is kept, so the whole
+    /// gesture undoes in one step instead of one step per mouse event.
+    private var grouping = false
+    private var groupRecorded = false
 
     public init(limit: Int = 60) {
         self.limit = limit
@@ -21,9 +25,23 @@ public final class History {
     public var canUndo: Bool { !past.isEmpty }
     public var canRedo: Bool { !future.isEmpty }
 
+    public func beginGroup() {
+        grouping = true
+        groupRecorded = false
+    }
+
+    public func endGroup() {
+        grouping = false
+        groupRecorded = false
+    }
+
     /// Call with the state *before* a change is applied.
     public func record(_ project: Project) {
         guard !replaying else { return }
+        if grouping {
+            guard !groupRecorded else { return }
+            groupRecorded = true
+        }
         past.append(project)
         if past.count > limit { past.removeFirst() }
         // A new edit invalidates anything that was undone, which is what every

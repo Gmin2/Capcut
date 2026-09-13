@@ -261,6 +261,8 @@ public final class FillButton: Control {
 public final class IconButton: Control {
     public var icon: Icon { didSet { needsDisplay = true } }
     public var transparent = false
+    /// For a pair like undo and redo that share one glyph.
+    public var mirrored = false
 
     public init(_ icon: Icon, transparent: Bool = false, action: (() -> Void)? = nil) {
         self.icon = icon
@@ -280,8 +282,17 @@ public final class IconButton: Control {
                          yRadius: Theme.radiusControl).fill()
         }
         let s: CGFloat = 15
+        NSGraphicsContext.saveGraphicsState()
+        if mirrored {
+            let flip = NSAffineTransform()
+            flip.translateX(by: bounds.midX, yBy: 0)
+            flip.scaleX(by: -1, yBy: 1)
+            flip.translateX(by: -bounds.midX, yBy: 0)
+            flip.concat()
+        }
         icon.draw(in: NSRect(x: bounds.midX - s / 2, y: bounds.midY - s / 2, width: s, height: s),
                   color: isEnabled ? Theme.icon : Theme.textTertiary)
+        NSGraphicsContext.restoreGraphicsState()
     }
 }
 

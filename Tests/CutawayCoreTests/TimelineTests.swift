@@ -404,3 +404,31 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(h.depth.undo, 3, "old steps are dropped rather than grown forever")
     }
 }
+
+final class HistoryGroupTests: XCTestCase {
+
+    /// A drag sends many edits. It must still undo in one step.
+    func testGroupedEditsUndoInOneStep() {
+        let h = History()
+        var p = Project()
+        h.beginGroup()
+        for trim in stride(from: 0.0, through: 0.8, by: 0.2) {
+            h.record(p)
+            p.trimStart = trim
+        }
+        h.endGroup()
+        guard let back = h.undo(current: p) else { return XCTFail("nothing to undo") }
+        XCTAssertEqual(back.trimStart, 0, accuracy: 0.001, "one undo returns to before the drag")
+        XCTAssertFalse(h.canUndo)
+    }
+
+    func testRecordingResumesAfterAGroup() {
+        let h = History()
+        h.beginGroup()
+        h.record(Project())
+        h.record(Project())
+        h.endGroup()
+        h.record(Project())
+        XCTAssertEqual(h.depth.undo, 2)
+    }
+}

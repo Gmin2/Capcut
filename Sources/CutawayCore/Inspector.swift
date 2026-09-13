@@ -1,159 +1,291 @@
 import AppKit
 
-/// The properties panel.
-///
-/// Everything here already exists in project.json; this is about not having to
-/// open a text editor to change a number. Each control writes straight back
-/// through the same save path the timeline uses, so there is one way an edit
-/// happens regardless of where it came from.
-public final class InspectorView: NSView {
+/// Right column: export, the take's name, a list of moments to jump to, and
+/// the settings. Every control writes back through the same save path the
+/// timeline uses.
+public final class InspectorView: ThemedView {
 
-    public var onEdit: ((inout Project) -> Void)? {
-        didSet { }
-    }
-    /// Called with a mutation to apply and save.
     public var apply: ((@escaping (inout Project) -> Void) -> Void)?
+    public var onSeek: ((Double) -> Void)?
+    public var onExport: (() -> Void)?
 
-    private let stack = NSStackView()
-    private var project: Project?
+    private let content = FlippedStack()
+    private var rows: [MomentRow] = []
+    private var rowsStart = 0
 
     public override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = Theme.panel.cgColor
 
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 10)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        let gear = IconButton(.gear, transparent: true)
+        gear.onClick = { [weak gear, weak self] in
+            guard let gear, let self else { return }
+            self.showAppearanceMenu(from: gear)
+        }
+        let export = FillButton("Export", icon: .download)
+        export.onClick = { [weak self] in self?.onExport?() }
+
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.documentView = content
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 6
+        content.edgeInsets = NSEdgeInsets(top: 4, left: 12, bottom: 16, right: 12)
+
+        let rule = Divider()
+        for v in [gear, export, rule, scroll] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(v)
+        }
+        content.translatesAutoresizingMaskIntoConstraints = false
+
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            gear.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            gear.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            export.centerYAnchor.constraint(equalTo: gear.centerYAnchor),
+            export.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            rule.topAnchor.constraint(equalTo: gear.bottomAnchor, constant: 12),
+            rule.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rule.heightAnchor.constraint(equalToConstant: 1),
+            scroll.topAnchor.constraint(equalTo: rule.bottomAnchor, constant: 8),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            content.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    public override var isFlipped: Bool { true }
+    public func show(_ p: Project, recording: URL, duration: Double) {
+        content.arrangedSubviews.forEach { content.removeArrangedSubview($0); $0.removeFromSuperview() }
+        rows = []
 
-    public func show(_ p: Project) {
-        project = p
-        stack.arrangedSubviews.forEach {
-            stack.removeArrangedSubview($0)
-            $0.removeFromSuperview()
+        let date = (try? recording.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? Date()
+        let f = DateFormatter()
+        f.dateFormat = "dd/MM/yy"
+        add(Chip(String(format: "%d:%02d", Int(duration) / 60, Int(duration.rounded()) % 60)), gap: 6)
+        let title = Theme.label(recording.lastPathComponent, .title, color: Theme.textPrimary)
+        title.maximumNumberOfLines = 2
+        title.lineBreakMode = .byWordWrapping
+        add(title, gap: 4)
+        add(Theme.label(f.string(from: date), .meta, color: Theme.textSecondary), gap: 14)
+
+        add(SectionHeader("Moments", icon: .bookmark), gap: 6)
+        let moments = Self.moments(in: p)
+        if moments.isEmpty {
+            add(Theme.label("Clicks and scene changes show up here.", .body, color: Theme.textTertiary), gap: 8)
+        }
+        for (i, m) in moments.enumerated() {
+            let row = MomentRow(number: i + 1, time: m.t, title: m.title)
+            row.onClick = { [weak self] in self?.onSeek?(m.t) }
+            rows.append(row)
+            add(row, gap: 6, height: 32)
         }
 
-        section("Background")
-        row(popup(["midnight", "slate", "ember", "forest", "paper", "ink", "screen"],
-                  selected: p.backgroundPreset ?? "midnight") { [weak self] name in
-            self?.apply? { $0.backgroundPreset = name; $0.style.background = Style.presets[name] ?? $0.style.background }
-        })
-
-        section("Frame")
-        row(popup(["none", "macWindow", "browser"],
-                  selected: p.deviceFrame.rawValue) { [weak self] name in
-            self?.apply? { $0.deviceFrame = DeviceFrame(rawValue: name) ?? .none }
-        })
+        section("Look")
+        add(pickerRow("Background", ["midnight", "slate", "ember", "forest", "paper", "ink", "screen"],
+                      p.backgroundPreset ?? "midnight") { name in
+            { $0.backgroundPreset = name; $0.style.background = Style.presets[name] ?? $0.style.background }
+        }, gap: 2)
+        add(pickerRow("Frame", ["none", "macWindow", "browser"], p.deviceFrame.rawValue) { name in
+            { $0.deviceFrame = DeviceFrame(rawValue: name) ?? .none }
+        }, gap: 2)
 
         section("Camera")
         scrub("Cursor size", p.cursor.scale, 0.8...3.0, 0.1) { $0.cursor.scale = $1 }
         scrub("Smoothing", p.cursor.smoothing, 0...0.9, 0.05) { $0.cursor.smoothing = $1 }
         scrub("Motion blur", p.motionBlur, 0...2, 0.05) { $0.motionBlur = $1 }
 
-        section("Trim")
-        scrub("Start", p.trimStart, 0...600, 0.1) { $0.trimStart = $1 }
-
         section("Captions")
         toggle("Show captions", p.captions.enabled) { $0.captions.enabled = $1 }
-        scrub("Words per line", Double(p.captions.wordsPerCue), 2...8, 1) {
-            $0.captions.wordsPerCue = Int($1)
-        }
-        scrub("Text size", p.captions.fontSize, 20...90, 2) { $0.captions.fontSize = $1 }
-
-        section("Keys")
+        scrub("Words per line", Double(p.captions.wordsPerCue), 2...8, 1) { $0.captions.wordsPerCue = Int($1) }
         toggle("Show keystrokes", p.keycast.visible) { $0.keycast.visible = $1 }
 
         section("Audio")
-        scrub("Voice", p.audio.mic, 0...2, 0.05) { $0.audio.mic = $1 }
-        scrub("System", p.audio.system, 0...2, 0.05) { $0.audio.system = $1 }
-        toggle("Duck under voice", p.audio.duckSystemUnderVoice) {
-            $0.audio.duckSystemUnderVoice = $1
+        slider("Voice", p.audio.mic) { $0.audio.mic = $1 }
+        slider("System", p.audio.system) { $0.audio.system = $1 }
+        toggle("Duck under voice", p.audio.duckSystemUnderVoice) { $0.audio.duckSystemUnderVoice = $1 }
+    }
+
+    /// Highlights the moment the playhead is inside.
+    public func update(time: Double) {
+        let current = rows.lastIndex { $0.time <= time + 0.01 }
+        for (i, row) in rows.enumerated() { row.selected = i == current }
+    }
+
+    static func moments(in p: Project) -> [(t: Double, title: String)] {
+        var out: [(Double, String)] = []
+        for (i, sc) in p.scenes.sorted(by: { $0.at < $1.at }).enumerated() where i > 0 {
+            out.append((sc.at, "Switch to " + Self.readable(sc.layout)))
+        }
+        for z in p.zooms { out.append((z.start, String(format: "Zoom in %.1f×", z.level))) }
+        for c in p.callouts { out.append((c.at, c.text)) }
+        return out.sorted { $0.0 < $1.0 }
+    }
+
+    static func readable(_ layout: String) -> String {
+        switch layout {
+        case "talkingHead": return "talking head"
+        case "screenOnly": return "screen"
+        case "sideBySide": return "side by side"
+        default: return layout
         }
     }
 
     // MARK: building blocks
 
+    private func add(_ v: NSView, gap: CGFloat, height: CGFloat? = nil) {
+        v.translatesAutoresizingMaskIntoConstraints = false
+        content.addArrangedSubview(v)
+        content.setCustomSpacing(gap, after: v)
+        if !(v is Chip) {
+            v.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -24).isActive = true
+        }
+        if let height { v.heightAnchor.constraint(equalToConstant: height).isActive = true }
+    }
+
     private func section(_ title: String) {
-        let label = Theme.label(title, .caption, color: Theme.textTertiary)
         let spacer = NSView()
         spacer.translatesAutoresizingMaskIntoConstraints = false
+        content.addArrangedSubview(spacer)
         spacer.heightAnchor.constraint(equalToConstant: 10).isActive = true
-        stack.addArrangedSubview(spacer)
-        stack.addArrangedSubview(label)
+        let d = Divider()
+        add(d, gap: 12, height: 1)
+        add(Theme.label(title.uppercased(), .caption, color: Theme.textTertiary), gap: 6)
     }
 
-    private func row(_ view: NSView) {
-        view.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(view)
-        view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -26).isActive = true
-    }
-
-    private func scrub(_ name: String, _ value: Double, _ range: ClosedRange<Double>,
-                       _ step: Double,
+    private func scrub(_ name: String, _ value: Double, _ range: ClosedRange<Double>, _ step: Double,
                        _ set: @escaping (inout Project, Double) -> Void) {
         let f = ScrubField(name, value: value, range: range, step: step)
         f.onChange = { [weak self] v in self?.apply? { set(&$0, v) } }
-        row(f)
+        add(f, gap: 4, height: 30)
     }
 
-    private func toggle(_ name: String, _ on: Bool,
-                        _ set: @escaping (inout Project, Bool) -> Void) {
-        let b = NSButton(checkboxWithTitle: name, target: nil, action: nil)
-        b.state = on ? .on : .off
-        b.font = .systemFont(ofSize: 11)
-        b.contentTintColor = Theme.accent
-        b.attributedTitle = NSAttributedString(string: name, attributes: [
-            .font: NSFont.systemFont(ofSize: 11),
-            .foregroundColor: Theme.textPrimary,
-        ])
-        let handler = ToggleHandler { [weak self] isOn in
-            self?.apply? { set(&$0, isOn) }
+    private func slider(_ name: String, _ value: Double, _ set: @escaping (inout Project, Double) -> Void) {
+        let s = SliderPill(name, value: value, range: 0...2) { "\(Int(($0 * 100).rounded()))%" }
+        s.onChange = { [weak self] v in self?.apply? { set(&$0, v) } }
+        add(s, gap: 6, height: 30)
+    }
+
+    private func toggle(_ name: String, _ on: Bool, _ set: @escaping (inout Project, Bool) -> Void) {
+        let row = NSView()
+        let label = Theme.label(name, .body, color: Theme.textSecondary)
+        let sw = Switch(on)
+        sw.onChange = { [weak self] v in self?.apply? { set(&$0, v) } }
+        for v in [label, sw] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(v)
         }
-        b.target = handler
-        b.action = #selector(ToggleHandler.fired(_:))
-        handlers.append(handler)
-        row(b)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            sw.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            sw.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            sw.widthAnchor.constraint(equalToConstant: 30),
+            sw.heightAnchor.constraint(equalToConstant: 18),
+        ])
+        add(row, gap: 4, height: 30)
     }
 
-    private func popup(_ options: [String], selected: String,
-                       _ set: @escaping (String) -> Void) -> NSPopUpButton {
-        let p = NSPopUpButton()
-        p.addItems(withTitles: options)
-        p.selectItem(withTitle: selected)
-        p.font = .systemFont(ofSize: 11)
-        let handler = PopupHandler { set($0) }
-        p.target = handler
-        p.action = #selector(PopupHandler.fired(_:))
-        handlers.append(handler)
-        return p
+    private func pickerRow(_ name: String, _ options: [String], _ selected: String,
+                           _ change: @escaping (String) -> (inout Project) -> Void) -> NSView {
+        let row = NSView()
+        let label = Theme.label(name, .body, color: Theme.textSecondary)
+        let dd = Dropdown(options, selected: selected)
+        dd.onChange = { [weak self] v in
+            let body = change(v)
+            self?.apply? { body(&$0) }
+        }
+        for v in [label, dd] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            dd.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            dd.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            dd.heightAnchor.constraint(equalToConstant: 28),
+            row.heightAnchor.constraint(equalToConstant: 34),
+        ])
+        return row
     }
 
-    /// AppKit targets are unowned, so the small closure wrappers have to be
-    /// kept alive by the panel itself.
-    private var handlers: [AnyObject] = []
+    private func showAppearanceMenu(from view: NSView) {
+        let menu = NSMenu()
+        for (title, mode) in [("Light", "light"), ("Dark", "dark"), ("Match system", "system")] {
+            let item = NSMenuItem(title: title, action: #selector(pickAppearance(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode
+            item.state = Theme.mode == mode ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
+    }
+
+    @objc private func pickAppearance(_ item: NSMenuItem) {
+        guard let mode = item.representedObject as? String else { return }
+        Theme.mode = mode
+    }
 }
 
-final class ToggleHandler: NSObject {
-    private let body: (Bool) -> Void
-    init(_ body: @escaping (Bool) -> Void) { self.body = body }
-    @objc func fired(_ sender: NSButton) { body(sender.state == .on) }
-}
+/// Numbered row: badge, time, title. Accent outline when the playhead is in it.
+final class MomentRow: Control {
+    let number: Int
+    let time: Double
+    let title: String
+    var selected = false { didSet { needsDisplay = true } }
 
-final class PopupHandler: NSObject {
-    private let body: (String) -> Void
-    init(_ body: @escaping (String) -> Void) { self.body = body }
-    @objc func fired(_ sender: NSPopUpButton) { body(sender.titleOfSelectedItem ?? "") }
+    init(number: Int, time: Double, title: String) {
+        self.number = number
+        self.time = time
+        self.title = title
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirty: NSRect) {
+        let r = bounds.insetBy(dx: 0.75, dy: 0.75)
+        let path = NSBezierPath(roundedRect: r, xRadius: Theme.radiusCard, yRadius: Theme.radiusCard)
+        (hovering && !selected ? Theme.fill : Theme.inset).setFill()
+        path.fill()
+        if selected {
+            path.lineWidth = Theme.borderSelected
+            Theme.accentBorder.setStroke()
+            path.stroke()
+        }
+
+        let badge = NSRect(x: 7, y: bounds.midY - 10, width: 20, height: 20)
+        (selected ? Theme.accent : Theme.badge).setFill()
+        NSBezierPath(roundedRect: badge, xRadius: 4, yRadius: 4).fill()
+        let n = "\(number)" as NSString
+        let nattrs: [NSAttributedString.Key: Any] = [
+            .font: Theme.Text.caption.font,
+            .foregroundColor: selected ? Theme.onAccent : Theme.textSecondary,
+        ]
+        let ns = n.size(withAttributes: nattrs)
+        n.draw(at: NSPoint(x: badge.midX - ns.width / 2, y: badge.midY - ns.height / 2), withAttributes: nattrs)
+
+        let stamp = String(format: "%02d:%02d", Int(time) / 60, Int(time) % 60) as NSString
+        let sattrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: Theme.textStrong,
+        ]
+        let ss = stamp.size(withAttributes: sattrs)
+        stamp.draw(at: NSPoint(x: 35, y: bounds.midY - ss.height / 2), withAttributes: sattrs)
+
+        let tattrs: [NSAttributedString.Key: Any] = [.font: Theme.Text.body.font,
+                                                     .foregroundColor: Theme.textPrimary]
+        let tx = 35 + ss.width + 8
+        (title as NSString).draw(with: NSRect(x: tx, y: bounds.midY - 8, width: bounds.width - tx - 8, height: 18),
+                                 options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin],
+                                 attributes: tattrs)
+    }
 }

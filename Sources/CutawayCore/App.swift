@@ -3,153 +3,48 @@ import Foundation
 import AVFoundation
 
 private var base: String { Paths.recordingsRoot.path }
-private var recordingDir: URL { Paths.currentRecording }
 private let outputSize = CGSize(width: 1920, height: 1080)
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
+    private var recordingDir = Paths.currentRecording.resolvingSymlinksInPath()
     private var preview: PreviewController?
-    private var timelineView = TimelineView()
-    private var timeLabel = NSTextField(labelWithString: "0.00 / 0.00")
-    private var playButton: FillButton!
+    private let timelineView = TimelineView()
+    private let sidebar = RecordingsSidebar()
+    private let inspector = InspectorView()
+    private let transcript = TranscriptPanel()
+    private let timeLabel = NSTextField(labelWithString: "")
+    private let statusLabel = Theme.label("", .meta, color: Theme.textTertiary)
+    private let playButton = TransportButton(.play, prominent: true)
+    private let undoButton = IconButton(.undo, transparent: true)
+    private let redoButton = IconButton(.undo, transparent: true)
     private var watcher: FileWatcher?
     private var recorder: Recorder?
-    private var recordButton: FillButton!
-    private var pauseButton: FillButton!
-    private var recordLabel = NSTextField(labelWithString: "")
     private var tick: Timer?
     private var hotkey: Hotkey?
     private var countdown = Countdown()
-    private let inspector = InspectorView()
-    private var statusLabel = Theme.label("", .meta, color: Theme.textSecondary)
     private let history = History()
-    private var undoButton: FillButton!
-    private var redoButton: FillButton!
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        Theme.apply()
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 840),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 1380, height: 880),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         window.title = "Cutaway"
-        window.center()
+        window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = Theme.canvas
-        window.minSize = NSSize(width: 980, height: 640)
+        window.center()
+        window.minSize = NSSize(width: 1120, height: 720)
 
         if let engine = try? RenderEngine() {
             preview = PreviewController(engine: engine)
         } else {
-            Log.line("ERROR: no Metal device, preview disabled")
+            Log.line("no Metal device, preview disabled")
         }
 
-        let previewBox = NSView()
-        previewBox.wantsLayer = true
-        previewBox.layer?.backgroundColor = NSColor.black.cgColor
-        previewBox.layer?.cornerRadius = Theme.radiusPanel
-        previewBox.layer?.masksToBounds = true
-        if let v = preview?.view {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            previewBox.addSubview(v)
-            NSLayoutConstraint.activate([
-                v.centerXAnchor.constraint(equalTo: previewBox.centerXAnchor),
-                v.centerYAnchor.constraint(equalTo: previewBox.centerYAnchor),
-                // Fits by whichever axis runs out first, so the frame is never
-                // cropped and never stretched.
-                v.widthAnchor.constraint(lessThanOrEqualTo: previewBox.widthAnchor),
-                v.heightAnchor.constraint(lessThanOrEqualTo: previewBox.heightAnchor),
-                v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: 9.0 / 16.0),
-                {
-                    let w = v.widthAnchor.constraint(equalTo: previewBox.widthAnchor)
-                    w.priority = .defaultHigh
-                    return w
-                }(),
-            ])
-        }
-
-        playButton = FillButton("Play") { [weak self] in self?.togglePlay() }
-        recordButton = FillButton("Record") { [weak self] in self?.toggleRecord() }
-        recordButton.showsDot = true
-        pauseButton = FillButton("Pause") { [weak self] in self?.togglePause() }
-        pauseButton.isEnabled = false
-        let exportButton = FillButton("Export", icon: .download) { [weak self] in self?.exportVideo() }
-
-        timeLabel = Theme.label("0.00 / 0.00", .meta, color: Theme.textSecondary)
-        recordLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
-        recordLabel.textColor = Theme.record
-
-        undoButton = FillButton("Undo") { [weak self] in self?.undo() }
-        redoButton = FillButton("Redo") { [weak self] in self?.redo() }
-        undoButton.isEnabled = false
-        redoButton.isEnabled = false
-
-        let transport = NSStackView(views: [
-            playButton, timeLabel, NSView(),
-            undoButton, redoButton, NSView(),
-            recordButton, pauseButton, recordLabel, NSView(),
-            FillButton("Reload") { [weak self] in self?.reload() },
-            exportButton,
-        ])
-        transport.orientation = .horizontal
-        transport.spacing = 8
-
-        timelineView.translatesAutoresizingMaskIntoConstraints = false
-        timelineView.wantsLayer = true
-        timelineView.layer?.cornerRadius = Theme.radiusPanel
-        timelineView.layer?.masksToBounds = true
-
-        // The log used to take a quarter of the window. It is diagnostics, so
-        // it belongs on one line where it can be read but not stared at.
-        statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.textColor = Theme.textSecondary
-
-        let left = NSStackView(views: [previewBox, transport, timelineView, statusLabel])
-        left.orientation = .vertical
-        left.spacing = Theme.gutter
-        left.alignment = .leading
-        // Only the preview stretches; the controls keep their natural height.
-        left.setHuggingPriority(.defaultLow, for: .vertical)
-        left.translatesAutoresizingMaskIntoConstraints = false
-
-        inspector.translatesAutoresizingMaskIntoConstraints = false
-        inspector.apply = { [weak self] change in self?.editProject(change) }
-
-        let root = NSView()
-        root.wantsLayer = true
-        root.layer?.backgroundColor = Theme.canvas.cgColor
-        root.addSubview(left)
-        root.addSubview(inspector)
-        window.contentView = root
-
-        NSLayoutConstraint.activate([
-            left.topAnchor.constraint(equalTo: root.topAnchor, constant: Theme.gutter),
-            left.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: Theme.gutter),
-            left.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -Theme.gutter),
-
-            inspector.leadingAnchor.constraint(equalTo: left.trailingAnchor,
-                                               constant: Theme.gutter),
-            inspector.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            inspector.topAnchor.constraint(equalTo: root.topAnchor),
-            inspector.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            inspector.widthAnchor.constraint(equalToConstant: 236),
-
-            // The preview takes whatever space the fixed rows leave, so the
-            // window never has dead area under the timeline.
-            previewBox.widthAnchor.constraint(equalTo: left.widthAnchor),
-            transport.widthAnchor.constraint(equalTo: left.widthAnchor),
-            timelineView.widthAnchor.constraint(equalTo: left.widthAnchor),
-            timelineView.heightAnchor.constraint(equalToConstant: 132),
-            statusLabel.widthAnchor.constraint(equalTo: left.widthAnchor),
-        ])
-
-        preview?.onTimeChange = { [weak self] t in
-            guard let self else { return }
-            self.timelineView.playhead = self.preview?.sourceTime ?? t
-            self.timeLabel.stringValue = String(format: "%.2f / %.2f",
-                                                t, self.preview?.duration ?? 0)
-            self.playButton.title = (self.preview?.isPlaying ?? false) ? "Pause" : "Play"
-        }
+        window.contentView = buildLayout()
+        wireUp()
 
         Log.sink = { [weak self] s in
             DispatchQueue.main.async { self?.statusLabel.stringValue = s }
@@ -159,24 +54,314 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        // Registered before anything else so a take can be started and stopped
-        // without ever touching this window, which would otherwise be in shot.
+        // Registered first so a take can start and stop without this window in shot.
         let hk = Hotkey()
-        let gotRecord = hk.register(.record) { [weak self] in self?.toggleRecord() }
+        hk.register(.record) { [weak self] in self?.toggleRecord() }
         hk.register(.pause) { [weak self] in self?.togglePause() }
         hotkey = hk
-        if gotRecord {
-            Log.line("hotkeys: \(Hotkey.Combo.record.label) record/stop, "
-                     + "\(Hotkey.Combo.pause.label) pause")
-        }
 
-        let voices = VoiceoverRenderer.availableVoices()
-        let premium = voices.filter { $0.quality != "default" }
-        Log.line("voices: \(voices.count) english, \(premium.count) enhanced/premium")
-        for v in premium.prefix(6) { Log.line("  \(v.name) [\(v.quality)]  \(v.identifier)") }
-
+        sidebar.reload(selected: recordingDir)
         reload()
         handleTriggers()
+    }
+
+    private func buildLayout() -> NSView {
+        let root = Surface(Theme.canvas, radius: 0)
+        let left = Surface(Theme.panel, radius: 0)
+        let right = Surface(Theme.panel, radius: 0)
+        let leftRule = Divider(), rightRule = Divider()
+
+        let previewCard = Surface(Theme.inset, radius: Theme.radiusPanel)
+        if let v = preview?.view {
+            v.wantsLayer = true
+            v.layer?.cornerRadius = 8
+            v.layer?.masksToBounds = true
+            v.translatesAutoresizingMaskIntoConstraints = false
+            previewCard.addSubview(v)
+            let fillWidth = v.widthAnchor.constraint(equalTo: previewCard.widthAnchor, constant: -24)
+            fillWidth.priority = .defaultHigh
+            NSLayoutConstraint.activate([
+                v.centerXAnchor.constraint(equalTo: previewCard.centerXAnchor),
+                v.centerYAnchor.constraint(equalTo: previewCard.centerYAnchor),
+                v.widthAnchor.constraint(lessThanOrEqualTo: previewCard.widthAnchor, constant: -24),
+                v.heightAnchor.constraint(lessThanOrEqualTo: previewCard.heightAnchor, constant: -24),
+                v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: 9.0 / 16.0),
+                fillWidth,
+            ])
+        }
+
+        let back = TransportButton(.back) { [weak self] in self?.skip(-5) }
+        let forward = TransportButton(.forward) { [weak self] in self?.skip(5) }
+        playButton.onClick = { [weak self] in self?.togglePlay() }
+        undoButton.onClick = { [weak self] in self?.undo() }
+        redoButton.onClick = { [weak self] in self?.redo() }
+        redoButton.mirrored = true
+        undoButton.isEnabled = false
+        redoButton.isEnabled = false
+        statusLabel.alignment = .right
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        setTime(0, 0)
+
+        let transport = NSStackView(views: [back, playButton, timeLabel, forward])
+        transport.spacing = 10
+
+        let timelineCard = Surface(Theme.inset, radius: Theme.radiusPanel)
+        let timelineHeader = SectionHeader("Timeline", icon: .layers)
+        let timelineHint = Theme.label("double-click a lane to add, drag to move",
+                                       .meta, color: Theme.textTertiary)
+        for v in [timelineHeader, timelineHint, timelineView] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            timelineCard.addSubview(v)
+        }
+
+        let transcriptCard = Surface(Theme.inset, radius: Theme.radiusPanel)
+        transcript.translatesAutoresizingMaskIntoConstraints = false
+        transcriptCard.addSubview(transcript)
+
+        let views: [NSView] = [left, right, leftRule, rightRule, sidebar, inspector,
+                               undoButton, redoButton, transport, statusLabel,
+                               previewCard, timelineCard, transcriptCard]
+        for v in views {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(v)
+        }
+
+        let center = NSLayoutGuide()
+        root.addLayoutGuide(center)
+
+        NSLayoutConstraint.activate([
+            left.topAnchor.constraint(equalTo: root.topAnchor),
+            left.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            left.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            left.widthAnchor.constraint(equalToConstant: 240),
+            leftRule.topAnchor.constraint(equalTo: root.topAnchor),
+            leftRule.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            leftRule.leadingAnchor.constraint(equalTo: left.trailingAnchor),
+            leftRule.widthAnchor.constraint(equalToConstant: 1),
+
+            right.topAnchor.constraint(equalTo: root.topAnchor),
+            right.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            right.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            right.widthAnchor.constraint(equalToConstant: 290),
+            rightRule.topAnchor.constraint(equalTo: root.topAnchor),
+            rightRule.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            rightRule.trailingAnchor.constraint(equalTo: right.leadingAnchor),
+            rightRule.widthAnchor.constraint(equalToConstant: 1),
+
+            // traffic lights sit over the sidebar, so its content starts below them
+            sidebar.topAnchor.constraint(equalTo: left.topAnchor, constant: 30),
+            sidebar.leadingAnchor.constraint(equalTo: left.leadingAnchor),
+            sidebar.trailingAnchor.constraint(equalTo: left.trailingAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: left.bottomAnchor),
+
+            inspector.topAnchor.constraint(equalTo: right.topAnchor),
+            inspector.leadingAnchor.constraint(equalTo: right.leadingAnchor),
+            inspector.trailingAnchor.constraint(equalTo: right.trailingAnchor),
+            inspector.bottomAnchor.constraint(equalTo: right.bottomAnchor),
+
+            center.leadingAnchor.constraint(equalTo: leftRule.trailingAnchor, constant: 16),
+            center.trailingAnchor.constraint(equalTo: rightRule.leadingAnchor, constant: -16),
+            center.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            center.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
+
+            undoButton.leadingAnchor.constraint(equalTo: center.leadingAnchor),
+            undoButton.centerYAnchor.constraint(equalTo: transport.centerYAnchor),
+            undoButton.widthAnchor.constraint(equalToConstant: 28),
+            undoButton.heightAnchor.constraint(equalToConstant: 28),
+            redoButton.leadingAnchor.constraint(equalTo: undoButton.trailingAnchor, constant: 4),
+            redoButton.centerYAnchor.constraint(equalTo: transport.centerYAnchor),
+            redoButton.widthAnchor.constraint(equalToConstant: 28),
+            redoButton.heightAnchor.constraint(equalToConstant: 28),
+
+            transport.topAnchor.constraint(equalTo: center.topAnchor),
+            transport.centerXAnchor.constraint(equalTo: center.centerXAnchor),
+            transport.heightAnchor.constraint(equalToConstant: 32),
+
+            statusLabel.centerYAnchor.constraint(equalTo: transport.centerYAnchor),
+            statusLabel.trailingAnchor.constraint(equalTo: center.trailingAnchor),
+            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: transport.trailingAnchor,
+                                                 constant: 24),
+            statusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
+
+            previewCard.topAnchor.constraint(equalTo: transport.bottomAnchor, constant: 12),
+            previewCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
+            previewCard.trailingAnchor.constraint(equalTo: center.trailingAnchor),
+
+            timelineCard.topAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: 12),
+            timelineCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
+            timelineCard.trailingAnchor.constraint(equalTo: center.trailingAnchor),
+            timelineHeader.topAnchor.constraint(equalTo: timelineCard.topAnchor, constant: 10),
+            timelineHeader.leadingAnchor.constraint(equalTo: timelineCard.leadingAnchor, constant: 12),
+            timelineHeader.widthAnchor.constraint(equalToConstant: 140),
+            timelineHint.centerYAnchor.constraint(equalTo: timelineHeader.centerYAnchor),
+            timelineHint.trailingAnchor.constraint(equalTo: timelineCard.trailingAnchor, constant: -12),
+            timelineView.topAnchor.constraint(equalTo: timelineHeader.bottomAnchor, constant: 8),
+            timelineView.leadingAnchor.constraint(equalTo: timelineCard.leadingAnchor, constant: 12),
+            timelineView.trailingAnchor.constraint(equalTo: timelineCard.trailingAnchor, constant: -4),
+            timelineView.heightAnchor.constraint(equalToConstant: TimelineView.preferredHeight),
+            timelineView.bottomAnchor.constraint(equalTo: timelineCard.bottomAnchor, constant: -8),
+
+            transcriptCard.topAnchor.constraint(equalTo: timelineCard.bottomAnchor, constant: 12),
+            transcriptCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
+            transcriptCard.trailingAnchor.constraint(equalTo: center.trailingAnchor),
+            transcriptCard.bottomAnchor.constraint(equalTo: center.bottomAnchor),
+            transcriptCard.heightAnchor.constraint(equalToConstant: 118),
+            transcript.topAnchor.constraint(equalTo: transcriptCard.topAnchor),
+            transcript.leadingAnchor.constraint(equalTo: transcriptCard.leadingAnchor),
+            transcript.trailingAnchor.constraint(equalTo: transcriptCard.trailingAnchor),
+            transcript.bottomAnchor.constraint(equalTo: transcriptCard.bottomAnchor),
+        ])
+        return root
+    }
+
+    private func wireUp() {
+        preview?.onTimeChange = { [weak self] t in
+            guard let self, let p = self.preview else { return }
+            let source = p.sourceTime
+            self.timelineView.playhead = source
+            self.transcript.update(time: source)
+            self.inspector.update(time: source)
+            self.setTime(t, p.duration)
+            self.playButton.glyph = p.isPlaying ? .pause : .play
+            self.sidebar.setPlaying(self.recordingDir, p.isPlaying)
+        }
+
+        timelineView.onSeek = { [weak self] sourceT in
+            guard let self, let p = self.preview else { return }
+            p.pause()
+            p.seek(to: p.outputTime(forSource: sourceT))
+        }
+
+        timelineView.onNudgeZoomLevel = { [weak self] step in
+            guard let self else { return }
+            let t = self.preview?.sourceTime ?? 0
+            self.editProject { p in
+                guard let i = p.zooms.firstIndex(where: { t >= $0.start && t <= $0.end }) else { return }
+                p.zooms[i].level = min(max(p.zooms[i].level + step, 1.1), 4.0)
+            }
+        }
+
+        timelineView.onMoveZoom = { [weak self] index, edge, t in
+            self?.editProject { p in
+                guard index < p.zooms.count else { return }
+                var z = p.zooms[index]
+                let minLength = 0.4
+                switch edge {
+                case -1: z.start = min(max(0, t), z.end - minLength)
+                case 1: z.end = max(t, z.start + minLength)
+                default:
+                    let length = z.end - z.start
+                    z.start = max(0, t)
+                    z.end = z.start + length
+                }
+                let half = (z.end - z.start) / 2
+                z.inDuration = min(z.inDuration, half)
+                z.outDuration = min(z.outDuration, half)
+                p.zooms[index] = z
+                p.zooms.sort { $0.start < $1.start }
+            }
+        }
+
+        timelineView.onGestureBegan = { [weak self] in self?.history.beginGroup() }
+        timelineView.onGestureEnded = { [weak self] in self?.history.endGroup() }
+
+        timelineView.onAddZoom = { [weak self] t in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                // kept inside the recording, or its end hides under the trim handle
+                let end = min(t + 1.8, duration)
+                var z = Zoom(start: max(0, min(t - 0.6, end - 0.6)), end: end, level: 2.0)
+                z.anchor = [0.5, 0.5]
+                p.zooms.append(z)
+                p.zooms.sort { $0.start < $1.start }
+            }
+        }
+
+        timelineView.onDeleteZoom = { [weak self] index in
+            self?.editProject { p in
+                guard index < p.zooms.count else { return }
+                p.zooms.remove(at: index)
+            }
+        }
+
+        timelineView.onTrim = { [weak self] isStart, t in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                let end = p.trimEnd ?? duration
+                if isStart { p.trimStart = min(max(0, t), end - 0.5) }
+                else { p.trimEnd = max(t, p.trimStart + 0.5) }
+            }
+        }
+
+        timelineView.onMoveScene = { [weak self] index, t in
+            self?.editProject { p in
+                var scenes = p.scenes.sorted { $0.at < $1.at }
+                guard index > 0, index < scenes.count else { return }
+                let lower = scenes[index - 1].at + 0.2
+                let upper = index + 1 < scenes.count ? scenes[index + 1].at - 0.2 : .greatestFiniteMagnitude
+                scenes[index].at = min(max(t, lower), upper)
+                p.scenes = scenes
+            }
+        }
+
+        timelineView.onAddScene = { [weak self] t in
+            self?.editProject { p in
+                var scenes = p.scenes.sorted { $0.at < $1.at }
+                let previous = scenes.last(where: { $0.at <= t })?.layout ?? "screenOnly"
+                scenes.append(Scene(at: t, layout: previous == "demo" ? "talkingHead" : "demo",
+                                    transition: 0.6))
+                p.scenes = scenes.sorted { $0.at < $1.at }
+            }
+        }
+
+        sidebar.onSelect = { [weak self] url in self?.open(url) }
+        sidebar.onPlay = { [weak self] url in
+            guard let self else { return }
+            if url.resolvingSymlinksInPath() != self.recordingDir { self.open(url) }
+            self.togglePlay()
+        }
+        sidebar.onNewRecording = { [weak self] in self?.toggleRecord() }
+
+        inspector.apply = { [weak self] change in self?.editProject(change) }
+        inspector.onSeek = { [weak self] sourceT in
+            guard let p = self?.preview else { return }
+            p.pause()
+            p.seek(to: p.outputTime(forSource: sourceT))
+        }
+        inspector.onExport = { [weak self] in self?.exportVideo() }
+    }
+
+    private func setTime(_ t: Double, _ total: Double) {
+        func clock(_ v: Double) -> String {
+            let s = Int(max(v, 0))
+            return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                             : String(format: "%d:%02d", s / 60, s % 60)
+        }
+        let text = NSMutableAttributedString(string: clock(t), attributes: [
+            .font: Theme.Text.time.font, .foregroundColor: Theme.textStrong])
+        text.append(NSAttributedString(string: " / " + clock(total), attributes: [
+            .font: Theme.Text.meta.font, .foregroundColor: Theme.textSecondary]))
+        timeLabel.attributedStringValue = text
+    }
+
+    private func skip(_ seconds: Double) {
+        guard let p = preview else { return }
+        p.seek(to: min(max(p.currentTime + seconds, 0), p.duration))
+    }
+
+    /// Switches the editor to another take. Latest follows, so the CLI and the
+    /// app always agree on which recording is current.
+    private func open(_ url: URL) {
+        preview?.pause()
+        recordingDir = url.resolvingSymlinksInPath()
+        Paths.linkLatest(to: recordingDir)
+        watcher = nil
+        history.clear()
+        refreshHistoryButtons()
+        sidebar.setSelected(recordingDir)
+        reload()
     }
 
     /// Read, mutate, write. The file stays the single source of truth, so a UI
@@ -242,21 +427,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshHistoryButtons() {
-        undoButton?.isEnabled = history.canUndo
-        redoButton?.isEnabled = history.canRedo
+        undoButton.isEnabled = history.canUndo
+        redoButton.isEnabled = history.canRedo
     }
 
     // MARK: actions
 
     @objc private func togglePlay() {
         preview?.togglePlay()
-        playButton.title = (preview?.isPlaying ?? false) ? "Pause" : "Play"
+        playButton.glyph = (preview?.isPlaying ?? false) ? .pause : .play
     }
 
     @objc private func reload() {
         guard FileManager.default.fileExists(
                 atPath: recordingDir.appendingPathComponent("recording.json").path) else {
-            Log.line("no recording yet - hit Record")
+            Log.line("no recording yet, press New Recording or ⌘⇧8")
             return
         }
         guard let m = Manifest.load(from: recordingDir.appendingPathComponent("recording.json"))
@@ -286,18 +471,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // playhead is mapped in from edited time.
         timelineView.duration = m.screen.duration
         timelineView.timeline = tl
-        timelineView.loadThumbnails(
-            from: recordingDir.appendingPathComponent(m.screen.file))
         timelineView.loadWaveform(from: recordingDir, manifest: m)
         timelineView.window?.invalidateCursorRects(for: timelineView)
-        inspector.show(project)
+        inspector.show(project, recording: recordingDir, duration: m.screen.duration)
+        transcript.show(Transcript.load(from: recordingDir))
         preview?.load(recordingDir: recordingDir, outputSize: outputSize,
                       timeline: tl, screenSize: screenSize, webcamSize: webcamSize)
-        Log.line(String(format: "loaded %.2fs  screen %.0fx%.0f  webcam %@  %d scenes  %d zooms  %d vo lines",
-                        m.screen.duration, screenSize.width, screenSize.height,
-                        webcamSize.map { "\(Int($0.width))x\(Int($0.height))" } ?? "none",
-                        project.scenes.count, project.zooms.count,
-                        project.voiceover?.lines.count ?? 0))
+        Log.line(String(format: "%.0f×%.0f  60 fps", screenSize.width, screenSize.height))
         if !tl.timeMap.isIdentity {
             Log.line(String(format: "  cuts: %d segments, %.2fs -> %.2fs",
                             tl.timeMap.segments.count, m.screen.duration,
@@ -327,6 +507,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func beginRecording() {
+        let target = Paths.newRecording()
+        pendingTake = target
         let r = Recorder()
         let sup = NSString(string: "~/Library/Application Support/Cutaway")
             .expandingTildeInPath
@@ -344,7 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             do {
-                try await r.start(to: recordingDir.appendingPathComponent("display.mov"))
+                try await r.start(to: target.appendingPathComponent("display.mov"))
                 await MainActor.run { self.startTick() }
             } catch {
                 Log.line("ERROR: \(error)")
@@ -365,7 +547,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run {
                     self.recorder = nil
                     self.refreshRecordUI()
-                    self.reload()
+                    if let take = self.pendingTake {
+                        self.pendingTake = nil
+                        self.sidebar.reload(selected: take)
+                        self.open(take)
+                    }
                 }
             } catch { Log.line("ERROR: \(error)") }
         }
@@ -387,18 +573,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func stopTick() { tick?.invalidate(); tick = nil }
 
+    private var pendingTake: URL?
+
     private func refreshRecordUI() {
         let r = recorder
         let live = r?.isRecording ?? false
-        recordButton.title = live ? "Stop" : "Record"
-        pauseButton.isEnabled = live
-        pauseButton.title = (r?.isPaused ?? false) ? "Resume" : "Pause"
+        sidebar.newButton.title = live ? "Stop Recording" : "New Recording"
         if live, let r {
-            recordLabel.stringValue = String(format: "%@ %.1fs",
-                                             r.isPaused ? "PAUSED" : "REC", r.elapsed)
-            recordLabel.textColor = r.isPaused ? .systemOrange : .systemRed
-        } else {
-            recordLabel.stringValue = ""
+            statusLabel.stringValue = String(format: "%@ %.1fs", r.isPaused ? "paused" : "recording",
+                                             r.elapsed)
         }
     }
 
@@ -477,7 +660,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.preview?.seek(to: 3.0)
                     try? await Task.sleep(nanoseconds: 700_000_000)
                     do {
-                        try await Snapshot.captureDisplay(
+                        try await Snapshot.captureWindow(
+                            bundleID: Bundle.main.bundleIdentifier ?? "com.mintu.cutaway",
                             to: URL(fileURLWithPath: base + "/editor.png"))
                     } catch {
                         Log.line("snapshot failed: \(error)")
@@ -499,12 +683,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
             }
         }
+        else if consume("autointeract") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
+        }
         else if consume("autoexport") { exportVideo() }
         else if consume("autoplay") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 self?.preview?.seek(to: 2.4)
             }
         }
+    }
+
+    /// Fires real mouse events at the timeline and checks the edit landed on
+    /// disk, since screenshots cannot tell you whether a drag did anything.
+    private func interactionCheck() {
+        let tl = timelineView
+        func event(_ type: NSEvent.EventType, _ t: Double, _ lane: TimelineView.Lane,
+                   clicks: Int = 1, flags: NSEvent.ModifierFlags = []) -> NSEvent {
+            let p = tl.convert(tl.point(at: t, lane: lane), to: nil)
+            return NSEvent.mouseEvent(with: type, location: p, modifierFlags: flags,
+                                      timestamp: ProcessInfo.processInfo.systemUptime,
+                                      windowNumber: window.windowNumber, context: nil,
+                                      eventNumber: 0, clickCount: clicks, pressure: 1)!
+        }
+        func click(_ t: Double, _ lane: TimelineView.Lane, clicks: Int = 1,
+                   flags: NSEvent.ModifierFlags = []) {
+            tl.mouseDown(with: event(.leftMouseDown, t, lane, clicks: clicks, flags: flags))
+            tl.mouseUp(with: event(.leftMouseUp, t, lane, clicks: clicks, flags: flags))
+        }
+        func drag(_ from: Double, _ to: Double, _ lane: TimelineView.Lane) {
+            tl.mouseDown(with: event(.leftMouseDown, from, lane))
+            tl.mouseDragged(with: event(.leftMouseDragged, (from + to) / 2, lane))
+            tl.mouseDragged(with: event(.leftMouseDragged, to, lane))
+            tl.mouseUp(with: event(.leftMouseUp, to, lane))
+        }
+        func project() -> Project? { Project.load(from: recordingDir) }
+        func report(_ name: String, _ ok: Bool, _ detail: String) {
+            Log.line("interact: \(ok ? "PASS" : "FAIL") \(name) \(detail)")
+        }
+
+        // the check rewrites the edit, so put the real one back afterwards
+        let original = project()
+        defer {
+            if let original { try? original.write(to: recordingDir) }
+            history.clear()
+            refreshHistoryButtons()
+            reload()
+        }
+
+        editProject { p in
+            p.zooms = [Zoom(start: 1.0, end: 2.5, level: 2.0)]
+            p.trimStart = 0
+            p.trimEnd = nil
+        }
+
+        click(4.0, .ruler)
+        let seeked = preview?.sourceTime ?? -1
+        report("seek", abs(seeked - 4.0) < 0.15, String(format: "playhead %.2f", seeked))
+
+        drag(2.5, 3.5, .zoom)
+        let end = project()?.zooms.first?.end ?? -1
+        report("zoom edge drag", abs(end - 3.5) < 0.15, String(format: "end %.2f", end))
+
+        drag(2.0, 2.6, .zoom)
+        let moved = project()?.zooms.first
+        report("zoom move", abs((moved?.start ?? -1) - 1.6) < 0.15,
+               String(format: "start %.2f end %.2f", moved?.start ?? -1, moved?.end ?? -1))
+
+        click(4.8, .zoom, clicks: 2)
+        let added = project()?.zooms.count ?? -1
+        report("double-click adds zoom", added == 2, "zooms \(added)")
+
+        if let second = project()?.zooms.last {
+            click((second.start + min(second.end, tl.duration)) / 2, .zoom, flags: .option)
+        }
+        let left = project()?.zooms.count ?? -1
+        report("option-click deletes zoom", left == 1, "zooms \(left)")
+
+        drag(0.0, 0.8, .wave)
+        let trim = project()?.trimStart ?? -1
+        report("trim start drag", abs(trim - 0.8) < 0.15, String(format: "trimStart %.2f", trim))
+
+        undo()
+        let undone = project()?.trimStart ?? -1
+        report("undo reverts trim", undone < 0.05, String(format: "trimStart %.2f", undone))
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
