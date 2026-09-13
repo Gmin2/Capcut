@@ -35,6 +35,16 @@ public enum CLI {
             case "displays": return try await displays()
             case "list":     return list()
             case "voices":   return voices()
+            case "gallery":
+                let o = Options(args)
+                let base = o.url("--out") ?? URL(fileURLWithPath: "gallery.png")
+                for dark in [false, true] {
+                    let url = base.deletingPathExtension()
+                        .appendingPathExtension(dark ? "dark.png" : "light.png")
+                    try Gallery.render(dark: dark, to: url)
+                    emit(url.path)
+                }
+                return 0
             case "help", "--help", "-h": usage(); return 0
             default:
                 FileHandle.standardError.write(Data("unknown command: \(command)\n".utf8))

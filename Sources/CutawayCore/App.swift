@@ -11,20 +11,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var preview: PreviewController?
     private var timelineView = TimelineView()
     private var timeLabel = NSTextField(labelWithString: "0.00 / 0.00")
-    private var playButton: NSButton!
+    private var playButton: FillButton!
     private var watcher: FileWatcher?
     private var recorder: Recorder?
-    private var recordButton: NSButton!
-    private var pauseButton: NSButton!
+    private var recordButton: FillButton!
+    private var pauseButton: FillButton!
     private var recordLabel = NSTextField(labelWithString: "")
     private var tick: Timer?
     private var hotkey: Hotkey?
     private var countdown = Countdown()
     private let inspector = InspectorView()
-    private var statusLabel = Theme.mono("", size: 11)
+    private var statusLabel = Theme.label("", .meta, color: Theme.textSecondary)
     private let history = History()
-    private var undoButton: FlatButton!
-    private var redoButton: FlatButton!
+    private var undoButton: FillButton!
+    private var redoButton: FillButton!
 
     func applicationDidFinishLaunching(_ note: Notification) {
         window = NSWindow(
@@ -35,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.titlebarAppearsTransparent = true
         window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = Theme.background
+        window.backgroundColor = Theme.canvas
         window.minSize = NSSize(width: 980, height: 640)
 
         if let engine = try? RenderEngine() {
@@ -47,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let previewBox = NSView()
         previewBox.wantsLayer = true
         previewBox.layer?.backgroundColor = NSColor.black.cgColor
-        previewBox.layer?.cornerRadius = Theme.corner
+        previewBox.layer?.cornerRadius = Theme.radiusPanel
         previewBox.layer?.masksToBounds = true
         if let v = preview?.view {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -68,20 +68,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ])
         }
 
-        playButton = FlatButton("Play", target: self, action: #selector(togglePlay))
-        recordButton = FlatButton("Record", kind: .danger, target: self,
-                                  action: #selector(toggleRecord))
-        pauseButton = FlatButton("Pause", target: self, action: #selector(togglePause))
+        playButton = FillButton("Play") { [weak self] in self?.togglePlay() }
+        recordButton = FillButton("Record") { [weak self] in self?.toggleRecord() }
+        recordButton.showsDot = true
+        pauseButton = FillButton("Pause") { [weak self] in self?.togglePause() }
         pauseButton.isEnabled = false
-        let exportButton = FlatButton("Export", kind: .primary, target: self,
-                                      action: #selector(exportVideo))
+        let exportButton = FillButton("Export", icon: .download) { [weak self] in self?.exportVideo() }
 
-        timeLabel = Theme.mono("0.00 / 0.00")
+        timeLabel = Theme.label("0.00 / 0.00", .meta, color: Theme.textSecondary)
         recordLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
-        recordLabel.textColor = Theme.recording
+        recordLabel.textColor = Theme.record
 
-        undoButton = FlatButton("Undo", target: self, action: #selector(undo))
-        redoButton = FlatButton("Redo", target: self, action: #selector(redo))
+        undoButton = FillButton("Undo") { [weak self] in self?.undo() }
+        redoButton = FillButton("Redo") { [weak self] in self?.redo() }
         undoButton.isEnabled = false
         redoButton.isEnabled = false
 
@@ -89,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             playButton, timeLabel, NSView(),
             undoButton, redoButton, NSView(),
             recordButton, pauseButton, recordLabel, NSView(),
-            FlatButton("Reload", target: self, action: #selector(reload)),
+            FillButton("Reload") { [weak self] in self?.reload() },
             exportButton,
         ])
         transport.orientation = .horizontal
@@ -97,13 +96,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         timelineView.translatesAutoresizingMaskIntoConstraints = false
         timelineView.wantsLayer = true
-        timelineView.layer?.cornerRadius = Theme.corner
+        timelineView.layer?.cornerRadius = Theme.radiusPanel
         timelineView.layer?.masksToBounds = true
 
         // The log used to take a quarter of the window. It is diagnostics, so
         // it belongs on one line where it can be read but not stared at.
         statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.textColor = Theme.textDim
+        statusLabel.textColor = Theme.textSecondary
 
         let left = NSStackView(views: [previewBox, transport, timelineView, statusLabel])
         left.orientation = .vertical
@@ -118,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let root = NSView()
         root.wantsLayer = true
-        root.layer?.backgroundColor = Theme.background.cgColor
+        root.layer?.backgroundColor = Theme.canvas.cgColor
         root.addSubview(left)
         root.addSubview(inspector)
         window.contentView = root

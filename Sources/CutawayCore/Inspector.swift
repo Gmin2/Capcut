@@ -87,7 +87,7 @@ public final class InspectorView: NSView {
     // MARK: building blocks
 
     private func section(_ title: String) {
-        let label = Theme.caption(title)
+        let label = Theme.label(title, .caption, color: Theme.textTertiary)
         let spacer = NSView()
         spacer.translatesAutoresizingMaskIntoConstraints = false
         spacer.heightAnchor.constraint(equalToConstant: 10).isActive = true
@@ -117,7 +117,7 @@ public final class InspectorView: NSView {
         b.contentTintColor = Theme.accent
         b.attributedTitle = NSAttributedString(string: name, attributes: [
             .font: NSFont.systemFont(ofSize: 11),
-            .foregroundColor: Theme.text,
+            .foregroundColor: Theme.textPrimary,
         ])
         let handler = ToggleHandler { [weak self] isOn in
             self?.apply? { set(&$0, isOn) }
