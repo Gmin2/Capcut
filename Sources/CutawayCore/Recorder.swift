@@ -45,6 +45,11 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     /// Which display to record. nil means the one with the menu bar, which is
     /// what a person means by "my screen" when they have two.
     public var displayID: CGDirectDisplayID?
+    /// Part of the display to record, in display points with the origin top
+    /// left. Nil records all of it.
+    public var area: CGRect?
+    /// AVCaptureDevice uniqueID. Nil uses the system default camera.
+    public var cameraID: String?
 
     public private(set) var isRecording = false
     public var isPaused: Bool { clock.isPaused }
@@ -74,8 +79,12 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             ($0.deviceDescription[.init("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
         }
         let scale = screen?.backingScaleFactor ?? 2
-        let w = Int(CGFloat(display.width) * scale)
-        let h = Int(CGFloat(display.height) * scale)
+        let bounds = CGRect(x: 0, y: 0, width: CGFloat(display.width), height: CGFloat(display.height))
+        let crop = area.map { $0.integral.intersection(bounds) }.flatMap { $0.width >= 64 && $0.height >= 64 ? $0 : nil }
+        let region = crop ?? bounds
+        // hevc wants even dimensions
+        let w = Int(region.width * scale) & ~1
+        let h = Int(region.height * scale) & ~1
         size = CGSize(width: w, height: h)
 
         let dir = url.deletingLastPathComponent()
@@ -100,6 +109,10 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         let config = SCStreamConfiguration()
         config.width = w
         config.height = h
+        if let crop {
+            config.sourceRect = crop
+            Log.line("recording area \(Int(crop.width))x\(Int(crop.height)) at \(Int(crop.minX)),\(Int(crop.minY))")
+        }
         config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = showCursorForVerification
@@ -127,7 +140,7 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             if await WebcamRecorder.requestAccess() {
                 let wc = WebcamRecorder(clock: clock)
                 do {
-                    try wc.start(to: dir.appendingPathComponent("webcam.mov"))
+                    try wc.start(to: dir.appendingPathComponent("webcam.mov"), deviceID: cameraID)
                     // Wait for the first camera frame so a talking-head opening
                     // actually has a picture from frame zero.
                     await wc.waitForFirstFrame()
@@ -138,9 +151,13 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
 
-        let space = CaptureSpace(screenFrame: screen?.frame
-            ?? CGRect(x: 0, y: 0, width: CGFloat(display.width), height: CGFloat(display.height)),
-            scale: scale)
+        // events are mapped into the recorded region, so a cropped take still
+        // gets its cursor and clicks in the right place
+        let screenFrame = screen?.frame ?? bounds
+        let space = CaptureSpace(screenFrame: CGRect(x: screenFrame.minX + region.minX,
+                                                     y: screenFrame.maxY - region.maxY,
+                                                     width: region.width, height: region.height),
+                                 scale: scale)
         let er = EventRecorder(space: space, clock: clock)
         er.captureKeys = captureKeys
         if captureKeys, !EventRecorder.canCaptureKeys {

@@ -24,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: Hotkey?
     private var countdown = Countdown()
     private let history = History()
+    private let setup = RecordSetupView()
+    private var skipCountdown = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         Theme.apply()
@@ -120,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let views: [NSView] = [left, right, leftRule, rightRule, sidebar, inspector,
                                undoButton, redoButton, transport, statusLabel,
-                               previewCard, timelineCard, transcriptCard]
+                               previewCard, timelineCard, transcriptCard, setup]
         for v in views {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -158,6 +160,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             inspector.leadingAnchor.constraint(equalTo: right.leadingAnchor),
             inspector.trailingAnchor.constraint(equalTo: right.trailingAnchor),
             inspector.bottomAnchor.constraint(equalTo: right.bottomAnchor),
+
+            // the setup screen takes over everything right of the sidebar
+            setup.topAnchor.constraint(equalTo: root.topAnchor),
+            setup.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            setup.leadingAnchor.constraint(equalTo: leftRule.trailingAnchor),
+            setup.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
             center.leadingAnchor.constraint(equalTo: leftRule.trailingAnchor, constant: 16),
             center.trailingAnchor.constraint(equalTo: rightRule.leadingAnchor, constant: -16),
@@ -316,13 +324,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        sidebar.onSelect = { [weak self] url in self?.open(url) }
+        sidebar.onSelect = { [weak self] url in
+            self?.hideSetup()
+            self?.open(url)
+        }
         sidebar.onPlay = { [weak self] url in
             guard let self else { return }
             if url.resolvingSymlinksInPath() != self.recordingDir { self.open(url) }
             self.togglePlay()
         }
-        sidebar.onNewRecording = { [weak self] in self?.toggleRecord() }
+        sidebar.onNewRecording = { [weak self] in
+            guard let self else { return }
+            if self.recorder?.isRecording == true { self.toggleRecord() } else { self.showSetup() }
+        }
+        setup.isHidden = true
+        setup.onClose = { [weak self] in self?.hideSetup() }
+        setup.onStart = { [weak self] countdown in
+            self?.skipCountdown = !countdown
+            self?.toggleRecord()
+        }
 
         inspector.apply = { [weak self] change in self?.editProject(change) }
         inspector.onSeek = { [weak self] sourceT in
@@ -491,6 +511,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Hide first, then count down, so the window is out of shot before the
         // first frame rather than being cut out afterwards.
+        setup.deactivate()
         window.orderOut(nil)
         countdown.run(from: countdownSeconds) { [weak self] in
             self?.beginRecording()
@@ -499,11 +520,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 0 disables the countdown, for scripted runs where nobody is watching.
     private var countdownSeconds: Int {
+        if skipCountdown {
+            skipCountdown = false
+            return 0
+        }
         let p = NSString(string: "~/Library/Application Support/Cutaway/countdown")
             .expandingTildeInPath
         if let s = try? String(contentsOfFile: p, encoding: .utf8),
            let v = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) { return v }
-        return 3
+        return RecordSettings.load().countdown
+    }
+
+    private func showSetup() {
+        preview?.pause()
+        setup.isHidden = false
+        setup.activate()
+    }
+
+    private func hideSetup() {
+        setup.deactivate()
+        setup.isHidden = true
     }
 
     private func beginRecording() {
@@ -515,10 +551,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         func off(_ n: String) -> Bool {
             FileManager.default.fileExists(atPath: sup + "/" + n)
         }
-        r.captureWebcam = !off("noWebcam")
-        r.captureMicrophone = !off("noMic")
-        r.captureSystemAudio = !off("noSystemAudio")
-        r.captureKeys = off("keycast")
+        // what the setup screen chose, with the old flag files still able to
+        // switch things off for scripted runs
+        let settings = RecordSettings.load()
+        r.captureWebcam = settings.camera && !off("noWebcam")
+        r.cameraID = settings.cameraID
+        r.captureMicrophone = settings.mic && !off("noMic")
+        r.captureSystemAudio = settings.desktopAudio > 0.005 && !off("noSystemAudio")
+        r.captureKeys = settings.keystrokes || off("keycast")
+        r.displayID = settings.displayID
+        switch settings.capture {
+        case .display: break
+        case .window: r.onlyApp = settings.app
+        case .area: r.area = settings.areaPoints(of: settings.displayID ?? CGMainDisplayID())
+        }
+        systemLevel = settings.desktopAudio
         r.onStateChange = { [weak self] in
             DispatchQueue.main.async { self?.refreshRecordUI() }
         }
@@ -549,8 +596,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.refreshRecordUI()
                     if let take = self.pendingTake {
                         self.pendingTake = nil
+                        self.hideSetup()
                         self.sidebar.reload(selected: take)
                         self.open(take)
+                        // start the system track where the setup slider was
+                        if var p = Project.load(from: take), p.audio.system != self.systemLevel {
+                            p.audio.system = self.systemLevel
+                            try? p.write(to: take)
+                        }
                     }
                 }
             } catch { Log.line("ERROR: \(error)") }
@@ -574,11 +627,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopTick() { tick?.invalidate(); tick = nil }
 
     private var pendingTake: URL?
+    private var systemLevel = 0.55
 
     private func refreshRecordUI() {
         let r = recorder
         let live = r?.isRecording ?? false
         sidebar.newButton.title = live ? "Stop Recording" : "New Recording"
+        setup.setRecording(live)
         if live, let r {
             statusLabel.stringValue = String(format: "%@ %.1fs", r.isPaused ? "paused" : "recording",
                                              r.elapsed)
@@ -687,6 +742,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autosetup") {
+            showSetup()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                Task {
+                    await MainActor.run {
+                        self.window.makeKeyAndOrderFront(nil)
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    do {
+                        try await Snapshot.captureWindow(
+                            bundleID: Bundle.main.bundleIdentifier ?? "com.mintu.cutaway",
+                            to: URL(fileURLWithPath: base + "/setup.png"))
+                    } catch {
+                        Log.line("snapshot failed: \(error)")
+                    }
+                }
+            }
+        }
         else if consume("autoplay") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 self?.preview?.seek(to: 2.4)

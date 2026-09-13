@@ -169,11 +169,13 @@ public enum CLI {
           record [--seconds N] [--out DIR] [--name NAME] [--no-webcam] [--no-mic]
                  [--system-audio] [--keys] [--countdown N]
                  [--exclude bundle.id,...] [--only bundle.id] [--display ID]
+                 [--area X,Y,W,H]
               Records the screen, then writes display.mov, events.json,
               recording.json, transcript.json and a default project.json.
               --keys logs keystrokes for the overlay; needs Input Monitoring.
               --exclude keeps an app's windows out of the capture entirely.
               --only captures just one app instead of the whole display.
+              --area records part of the display, in points from its top left.
               Use `cutaway windows` to find bundle ids and `cutaway displays`
               to find display ids.
 
@@ -251,6 +253,9 @@ public enum CLI {
             .filter { !$0.isEmpty }
         r.onlyApp = opts.value("--only")
         r.displayID = opts.double("--display").map { CGDirectDisplayID($0) }
+        if let a = opts.value("--area")?.split(separator: ",").compactMap({ Double($0) }), a.count == 4 {
+            r.area = CGRect(x: a[0], y: a[1], width: a[2], height: a[3])
+        }
 
         try await r.start(to: dir.appendingPathComponent("display.mov"))
         // A CLI recording is unattended, so it runs for a fixed span rather
@@ -264,7 +269,10 @@ public enum CLI {
                 screenSize: CGSize(width: m.screen.pixelSize[0], height: m.screen.pixelSize[1]),
                 duration: m.screen.duration, hasWebcam: m.webcam != nil)
         }
-        Paths.linkLatest(to: dir)
+        // a take written somewhere else on purpose should not become Latest
+        if dir.standardizedFileURL.path.hasPrefix(Paths.recordingsRoot.standardizedFileURL.path) {
+            Paths.linkLatest(to: dir)
+        }
         emit(dir.path)
         return 0
     }

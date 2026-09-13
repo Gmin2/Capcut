@@ -205,6 +205,8 @@ public final class FillButton: Control {
     public var showsDot = false { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
     public var trailingChevron = false { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
     public var transparent = false { didSet { needsDisplay = true } }
+    /// Split buttons: a click on the chevron side goes here instead of onClick.
+    public var onChevron: (() -> Void)?
 
     public init(_ title: String, icon: Icon? = nil, action: (() -> Void)? = nil) {
         self.title = title
@@ -217,6 +219,18 @@ public final class FillButton: Control {
 
     private var leading: CGFloat { (icon != nil || showsDot) ? 22 : 0 }
     private var trailing: CGFloat { trailingChevron ? 27 : 0 }
+
+    public override func mouseUp(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if trailingChevron, let onChevron, isEnabled, pressed,
+           bounds.contains(p), p.x > bounds.maxX - trailing {
+            pressed = false
+            needsDisplay = true
+            onChevron()
+            return
+        }
+        super.mouseUp(with: event)
+    }
 
     public override var intrinsicContentSize: NSSize {
         let w = (title as NSString).size(withAttributes: [.font: Theme.Text.body.font]).width

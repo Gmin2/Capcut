@@ -47,14 +47,16 @@ public final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBuffe
         }
     }
 
-    public func start(to url: URL, preset: AVCaptureSession.Preset = .hd1920x1080) throws {
+    public func start(to url: URL, deviceID: String? = nil,
+                      preset: AVCaptureSession.Preset = .hd1920x1080) throws {
 
-        guard let device = AVCaptureDevice.default(for: .video) else {
+        let chosen = deviceID.flatMap { AVCaptureDevice(uniqueID: $0) }
+        guard let device = chosen ?? AVCaptureDevice.default(for: .video) else {
             throw NSError(domain: "cutaway", code: 30,
                           userInfo: [NSLocalizedDescriptionKey: "no camera"])
         }
         session.beginConfiguration()
-        session.sessionPreset = preset
+        if session.canSetSessionPreset(preset) { session.sessionPreset = preset }
         let deviceInput = try AVCaptureDeviceInput(device: device)
         guard session.canAddInput(deviceInput) else {
             throw NSError(domain: "cutaway", code: 31)
