@@ -5,10 +5,11 @@ import simd
 /// Where one source sits on the canvas. Rects are normalised to the output so
 /// a layout is resolution independent.
 /// Chrome drawn around a layer: nothing, a macOS title bar with traffic
-/// lights, or a browser bar with an address pill. Drawn in the shader rather
-/// than as a bitmap so it stays sharp at any zoom and any output size.
+/// lights, a browser bar with an address pill, or a phone bezel with a camera
+/// hole. Drawn in the shader rather than as a bitmap so it stays sharp at any
+/// zoom and any output size.
 public enum DeviceFrame: String, Codable {
-    case none, macWindow, browser
+    case none, macWindow, browser, phone
 }
 
 public struct Placement: Codable {
@@ -36,6 +37,27 @@ public struct Placement: Codable {
         self.circle = circle
         self.cornerRadius = cornerRadius
         self.opacity = opacity
+    }
+
+    /// Every field but the rect is optional, so a layout written by hand in
+    /// project.json only has to say what differs from the defaults.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func get<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? c.decode(T.self, forKey: key)) ?? fallback
+        }
+        rect = try c.decode([Double].self, forKey: .rect)
+        fit = get(.fit, "contain")
+        circle = get(.circle, false)
+        cornerRadius = get(.cornerRadius, 18)
+        opacity = get(.opacity, 1)
+        shadowOpacity = get(.shadowOpacity, 0.55)
+        shadowRadius = get(.shadowRadius, 70)
+        shadowOffsetY = get(.shadowOffsetY, 26)
+        borderWidth = get(.borderWidth, 1.5)
+        borderColor = get(.borderColor, "#FFFFFF26")
+        frame = get(.frame, DeviceFrame.none)
+        frameBarHeight = get(.frameBarHeight, 34)
     }
 }
 
@@ -140,7 +162,16 @@ extension Placement {
         p.borderWidth = Float(borderWidth)
         p.borderColor = Style.rgba(borderColor)
 
-        if frame != .none {
+        if frame == .phone {
+            // The bezel wraps the screen on every side, so the plate grows
+            // outward by it and the corners round off with it. Sized off the
+            // screen width because that is what a real phone's bezel follows.
+            let bezel = p.dst.z * Placement.phoneBezel
+            p.dst = SIMD4(p.dst.x - bezel, p.dst.y - bezel, p.dst.z + bezel * 2, p.dst.w + bezel * 2)
+            p.cornerRadius += bezel
+            p.frameBar = bezel
+            p.frameKind = 3
+        } else if frame != .none {
             // The bar sits above the content, so the plate grows upward and the
             // video itself is not squashed.
             let bar = Float(frameBarHeight) * Float(outputSize.height / 1080)
@@ -150,6 +181,9 @@ extension Placement {
         }
         return p
     }
+
+    /// Bezel thickness as a share of the screen width.
+    static let phoneBezel: Float = 0.032
 
     /// A hidden layer still needs a position, or it would fly in from (0,0)
     /// during a transition. Collapsing to the centre of where it will be reads

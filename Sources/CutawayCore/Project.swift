@@ -28,8 +28,11 @@ public struct Project: Codable {
     public var callouts: [Callout] = []
     public var calloutTheme = CalloutTheme()
     public var captions = CaptionStyle()
-    /// "none", "macWindow" or "browser", drawn around the screen layer.
+    /// "none", "macWindow", "browser" or "phone", drawn around the screen layer.
     public var deviceFrame: DeviceFrame = .none
+    /// Extra or replacement layouts by name, for framing the built-in ones do
+    /// not cover, like a portrait phone recording filling a tall canvas.
+    public var layouts: [String: Layout] = [:]
     public var masks: [Mask] = []
     /// 0 off, 1 is roughly a film shutter.
     public var motionBlur: Double = 0.85
@@ -77,6 +80,7 @@ public struct Project: Codable {
         calloutTheme = get(.calloutTheme, CalloutTheme())
         captions = get(.captions, CaptionStyle())
         deviceFrame = get(.deviceFrame, DeviceFrame.none)
+        layouts = get(.layouts, [:])
         masks = get(.masks, [])
         motionBlur = get(.motionBlur, 0.85)
         backgroundPreset = try? c.decode(String.self, forKey: .backgroundPreset)
@@ -197,6 +201,7 @@ public struct Project: Codable {
         tl.captionStyle = captions
         tl.setTranscript(transcript)
         tl.deviceFrame = deviceFrame
+        tl.layouts = Layout.named.merging(layouts) { _, new in new }
         tl.masks = masks
         tl.motionBlur = motionBlur
         tl.timeMap = TimeMap(segments: trimmedSegments(sourceDuration: sourceDuration),

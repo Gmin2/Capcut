@@ -31,6 +31,7 @@ public enum CLI {
             case "transcribe": return try await transcribe(args)
             case "pack":     return try pack(args)
             case "trim":     return try trim(args)
+            case "import":   return try await importVideo(args)
             case "windows":  return try await windows()
             case "displays": return try await displays()
             case "list":     return list()
@@ -180,8 +181,9 @@ public enum CLI {
               to find display ids.
 
           export [--in DIR] [--out FILE] [--preset NAME] [--all]
-                 [--width N] [--height N] [--fps N]
-              Renders the edit described by project.json.
+                 [--width N] [--height N] [--fps N] [--codec hevc|h264]
+              Renders the edit described by project.json. A custom size with
+              a .gif output makes a gif at that size.
               Presets: 1080p, 4k, h264, vertical, square, gif.
               --all writes every preset next to the output file.
 
@@ -213,6 +215,11 @@ public enum CLI {
           trim [--in DIR]
               Deletes the raw capture, keeping the edit and the event log.
               Do this once an export is approved; raw media is most of the size.
+
+          import --video FILE [--out DIR] [--name NAME]
+              Makes a recording out of a video file that did not come from
+              Cutaway, like a phone screen recording, so it can be framed,
+              cut and exported like any other take.
 
           snap [--out FILE]
               Screenshots the display through the app's capture grant.
@@ -311,6 +318,15 @@ public enum CLI {
                 fps: 60, codec: .hevc, bitrate: 12_000_000)
         }
         if let f = opts.double("--fps") { preset.fps = Int32(f) }
+        // HEVC is smaller, but feeds and older players still want H.264, and
+        // H.264 needs more bits to look the same.
+        if opts.value("--codec")?.lowercased() == "h264" {
+            preset.codec = .h264
+            preset.bitrate = Int(Double(preset.bitrate) * 1.6)
+        }
+        // A custom size written to .gif means a gif at that size, which is how
+        // a portrait loop for a feed gets made.
+        if out.pathExtension.lowercased() == "gif" { preset.isGIF = true }
 
         // Keep the extension honest: a GIF written to .mp4 confuses everything
         // downstream.
@@ -508,6 +524,56 @@ public enum CLI {
         let c = Document.inspect(doc)
         Log.line(String(format: "packed %.1f MB", Double(c.totalBytes) / 1_048_576))
         emit(doc.path)
+        return 0
+    }
+
+    static func importVideo(_ args: [String]) async throws -> Int32 {
+        let opts = Options(args)
+        guard let video = opts.url("--video") else {
+            FileHandle.standardError.write(Data("import needs --video FILE\n".utf8))
+            return 1
+        }
+        let fm = FileManager.default
+        let dir = opts.url("--out") ?? Paths.newRecording(named: opts.value("--name"))
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let ext = video.pathExtension.isEmpty ? "mov" : video.pathExtension.lowercased()
+        let file = "display.\(ext)"
+        let dest = dir.appendingPathComponent(file)
+        if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+        try fm.copyItem(at: video, to: dest)
+
+        let asset = AVURLAsset(url: dest)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            FileHandle.standardError.write(Data("no video track in \(video.lastPathComponent)\n".utf8))
+            return 1
+        }
+        // A phone recording can carry its orientation as a transform rather
+        // than in its pixels, so size it the way it plays.
+        let natural = try await track.load(.naturalSize)
+        let transform = try await track.load(.preferredTransform)
+        let shown = natural.applying(transform)
+        let size = CGSize(width: abs(shown.width), height: abs(shown.height))
+        let duration = CMTimeGetSeconds(try await asset.load(.duration))
+        let rate = Double(try await track.load(.nominalFrameRate))
+
+        let manifest = Manifest(screen: .init(
+            file: file, pixelSize: [Double(size.width), Double(size.height)],
+            offset: 0, duration: duration, frames: Int((rate * duration).rounded())))
+        try manifest.write(to: dir.appendingPathComponent("recording.json"))
+
+        if !Project.exists(in: dir) {
+            // No pointer and no voice in an imported video, so the automatic
+            // cuts and zooms would be guessing. Start from the whole clip.
+            var project = Project.makeDefault(recordingDir: dir, manifest: manifest)
+            project.segments = []
+            project.zooms = []
+            project.cursor.visible = false
+            project.output = .init(width: Double(size.width), height: Double(size.height), fps: max(Int(rate.rounded()), 30))
+            try project.write(to: dir)
+        }
+        Log.line(String(format: "imported %.0fx%.0f, %.1fs", size.width, size.height, duration))
+        emit(dir.path)
         return 0
     }
 
