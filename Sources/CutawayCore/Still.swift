@@ -42,7 +42,7 @@ public enum Still {
                       sourceDuration: manifest?.screen.duration ?? 0,
                       transcript: Transcript.load(from: recordingDir))
         if let override = preset?.layoutOverride {
-            tl.layouts = Layout.named.merging(override) { _, new in new }
+            tl.layouts = tl.layouts.merging(override) { _, new in new }
         }
         let state = RenderState(screenSize: screenSize, webcamSize: webcamSize,
                                 outputSize: outputSize, timeline: tl)

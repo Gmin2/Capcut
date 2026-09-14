@@ -49,6 +49,32 @@ exist, so there is nothing to leak even if you share the raw file. `--only`
 captures a single app instead of the whole display. Both beat masking after the
 fact, which is only for what you did not think of in advance.
 
+## Bringing in a video from elsewhere
+
+    cutaway import --video ~/Downloads/phone-recording.mp4 --name "app demo"
+
+Makes a take out of any video file, like an Android or iPhone screen recording,
+so it can be cut, zoomed, framed and exported like a Cutaway recording. There
+is no pointer or voice in it, so the automatic cuts and zooms are left empty.
+
+A phone recording is tall, so give it a layout of its own and the phone frame:
+
+```json
+{
+  "output": {"width": 1080, "height": 2280, "fps": 60},
+  "deviceFrame": "phone",
+  "layouts": {"phone": {"screen": {"rect": [0.06, 0.03, 0.88, 0.94], "cornerRadius": 86}}},
+  "scenes": [{"at": 0, "layout": "phone"}]
+}
+```
+
+`layouts` in project.json adds to the built-in ones, and a placement only needs
+the fields that differ from the defaults. Export at the same size, as H.264 for
+feeds, or as a gif:
+
+    cutaway export --in DIR --width 1080 --height 2280 --codec h264 --out demo.mp4
+    cutaway export --in DIR --width 480 --height 1014 --fps 12 --out demo.gif
+
 ## Undo
 
 Command-Z and shift-command-Z, or the buttons in the transport. Every edit is a
@@ -190,7 +216,7 @@ event and the letter is not.
 | field | |
 |---|---|
 | `callouts` | `[{at, duration, text, subtitle, style}]` - `lowerThird`, `center`, `topLeft`, `topCenter`, `bottomCenter` |
-| `deviceFrame` | `none`, `macWindow`, `browser` - chrome drawn around the screen |
+| `deviceFrame` | `none`, `macWindow`, `browser`, `phone` - chrome drawn around the screen |
 | `masks` | `[{rect, start, end, style, strength}]` - `mosaic` or `blur`, rect normalised to the source |
 | `motionBlur` | 0 off, 0.85 default, roughly a film shutter |
 

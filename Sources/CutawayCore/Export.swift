@@ -99,7 +99,7 @@ public enum Export {
             sourceDuration: duration,
             transcript: Transcript.load(from: recordingDir))
         if let override = preset.layoutOverride {
-            tl.layouts = Layout.named.merging(override) { _, new in new }
+            tl.layouts = tl.layouts.merging(override) { _, new in new }
         }
 
         // Narration is synthesised before the video loop so its length can

@@ -93,7 +93,7 @@ public final class InspectorView: ThemedView {
                       p.backgroundPreset ?? "midnight") { name in
             { $0.backgroundPreset = name; $0.style.background = Style.presets[name] ?? $0.style.background }
         }, gap: 2)
-        add(pickerRow("Frame", ["none", "macWindow", "browser"], p.deviceFrame.rawValue) { name in
+        add(pickerRow("Frame", ["none", "macWindow", "browser", "phone"], p.deviceFrame.rawValue) { name in
             { $0.deviceFrame = DeviceFrame(rawValue: name) ?? .none }
         }, gap: 2)
 

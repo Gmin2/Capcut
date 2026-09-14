@@ -390,9 +390,11 @@ public final class RenderEngine {
         float aOut = aPlate + aShadow * (1.0 - aPlate);
         if (aOut < 0.002) { discard_fragment(); }
 
-        // With chrome, the video occupies the plate below the bar.
-        float2 contentOrigin = P.dst.xy + float2(0.0, P.frameBar);
-        float2 contentSize = P.dst.zw - float2(0.0, P.frameBar);
+        // With chrome, the video occupies the plate below the bar. A phone
+        // bezel insets it on every side instead.
+        bool phone = P.frameKind > 2.5;
+        float2 contentOrigin = phone ? P.dst.xy + P.frameBar : P.dst.xy + float2(0.0, P.frameBar);
+        float2 contentSize = phone ? P.dst.zw - 2.0 * P.frameBar : P.dst.zw - float2(0.0, P.frameBar);
         float2 local = (p - contentOrigin) / max(contentSize, float2(1.0));
         float2 srcPx = P.src.xy + local * P.src.zw;
 
@@ -445,7 +447,23 @@ public final class RenderEngine {
             c = src.sample(smp, sampleAt / P.sourceSize).rgb;
         }
 
-        if (P.frameBar > 0.5) {
+        if (phone && P.frameBar > 0.5) {
+            float bezel = P.frameBar;
+            float innerR = max(radius - bezel, 0.0);
+            float sdIn = sdRoundBox(p - centre, halfSize - bezel, innerR);
+            // Dark body with a lighter rim at the outer edge, which is what
+            // makes it read as a metal band rather than a thick black stroke.
+            float rim = saturate(-sd / (bezel * 0.45));
+            float3 body = mix(float3(0.27, 0.29, 0.33), float3(0.043, 0.047, 0.059), rim);
+            c = mix(c, body, smoothstep(-0.75, 0.75, sdIn));
+
+            float2 cam = float2(centre.x, P.dst.y + bezel * 2.3);
+            float camR = bezel * 0.62;
+            float dCam = length(p - cam);
+            c = mix(c, float3(0.02, 0.02, 0.025), 1.0 - smoothstep(camR - 1.0, camR + 0.5, dCam));
+        }
+
+        if (P.frameBar > 0.5 && !phone) {
             float yInBar = p.y - P.dst.y;
             if (yInBar < P.frameBar) {
                 // Faint vertical gradient, the way real title bars are lit.
