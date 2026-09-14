@@ -192,8 +192,10 @@ public enum CLI {
               zooms, scenes and the transcript. Start here before editing.
 
           still --at T[,T2,...] [--in DIR] [--out FILE] [--preset NAME]
+                [--width N] [--height N]
               Renders composited frames to PNG. Much faster than an export
-              when checking a layout or an overlay.
+              when checking a layout or an overlay. Without a preset or a
+              size it uses the output size in project.json.
 
           pitch --name "Your Name" --role "Your Role" [--in DIR]
               Rewrites project.json as a pitch video: webcam opening, handover
@@ -423,8 +425,18 @@ public enum CLI {
             FileHandle.standardError.write(Data("--at needs at least one time\n".utf8))
             return 1
         }
-        let preset = opts.value("--preset").flatMap { ExportPreset.named[$0.lowercased()] }
-            ?? ExportPreset.hd
+        // A preset wins, then an explicit size, then the size the project asks
+        // for, so a still matches what an export of that project would look like.
+        var preset = opts.value("--preset").flatMap { ExportPreset.named[$0.lowercased()] }
+        if preset == nil {
+            let output = Project.load(from: dir)?.output ?? Project.Output()
+            preset = ExportPreset(
+                name: "custom",
+                size: CGSize(width: opts.double("--width") ?? output.width,
+                             height: opts.double("--height") ?? output.height),
+                fps: Int32(output.fps), codec: .hevc, bitrate: 12_000_000)
+        }
+        guard let preset else { return 1 }
         let base = opts.url("--out") ?? dir.appendingPathComponent("still.png")
 
         for (i, t) in times.enumerated() {
