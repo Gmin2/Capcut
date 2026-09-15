@@ -25,6 +25,17 @@ public final class Prompter: NSObject {
         set { UserDefaults.standard.set(newValue, forKey: "prompter.speed") }
     }
 
+    /// How much of the panel background shows. See-through by default, so
+    /// the camera preview and the screen stay visible behind the words.
+    private var backgroundAlpha: CGFloat {
+        get { UserDefaults.standard.object(forKey: "prompter.bg") as? CGFloat ?? 0.3 }
+        set { UserDefaults.standard.set(newValue, forKey: "prompter.bg") }
+    }
+    private static let alphaSteps: [CGFloat] = [0, 0.3, 0.6, 0.94]
+    private var root: Surface?
+    private var fade: FadeOverlay?
+    private let opacityButton = FillButton("")
+
     private var fontSize: CGFloat {
         get { UserDefaults.standard.object(forKey: "prompter.size") as? CGFloat ?? 30 }
         set { UserDefaults.standard.set(newValue, forKey: "prompter.size") }
@@ -93,8 +104,12 @@ public final class Prompter: NSObject {
         // belt and braces with the recorder's own exclusion
         p.sharingType = .none
 
-        let root = Surface(NSColor(white: 0.08, alpha: 0.94), radius: 0)
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = false
+        let root = Surface(.clear, radius: 12)
         p.contentView = root
+        self.root = root
 
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = false
@@ -110,6 +125,7 @@ public final class Prompter: NSObject {
 
         // soft fades top and bottom, with the reading line near the top where the camera is
         let fade = FadeOverlay()
+        self.fade = fade
 
         playButton.onClick = { [weak self] in
             guard let self else { return }
@@ -123,15 +139,19 @@ public final class Prompter: NSObject {
         let bigger = FillButton("A+") { [weak self] in self?.nudgeSize(2) }
         editButton.onClick = { [weak self] in self?.toggleEdit() }
         let close = FillButton("Hide") { [weak self] in self?.hide() }
+        opacityButton.transparent = true
+        opacityButton.onClick = { [weak self] in self?.cycleBackground() }
         for b in [slower, faster, smaller, bigger, close] { b.transparent = true }
 
-        let bar = NSStackView(views: [top, playButton, slower, speedLabel, faster, smaller, bigger, editButton, close])
+        let bar = NSStackView(views: [top, playButton, slower, speedLabel, faster, smaller, bigger, opacityButton, editButton, close])
         bar.spacing = 6
         bar.setCustomSpacing(14, after: playButton)
         bar.setCustomSpacing(14, after: faster)
         bar.setCustomSpacing(14, after: bigger)
 
-        for v in [scroll, fade, bar] as [NSView] {
+        // the controls keep a solid pill so they read over anything behind
+        let barBack = Surface(NSColor(white: 0.1, alpha: 0.85), radius: 10)
+        for v in [scroll, fade, barBack, bar] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -147,10 +167,15 @@ public final class Prompter: NSObject {
             bar.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             bar.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             bar.heightAnchor.constraint(equalToConstant: 32),
+            barBack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: -8),
+            barBack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: 8),
+            barBack.topAnchor.constraint(equalTo: bar.topAnchor, constant: -5),
+            barBack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: 5),
             speedLabel.widthAnchor.constraint(equalToConstant: 34),
         ])
         panel = p
         updateSpeedLabel()
+        applyBackground()
     }
 
     /// Top centre of the screen with the camera, as close to the lens as it gets.
@@ -177,6 +202,10 @@ public final class Prompter: NSObject {
         let spoken = NSMutableParagraphStyle()
         spoken.lineSpacing = size * 0.3
         spoken.paragraphSpacing = size * 0.5
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.95)
+        shadow.shadowBlurRadius = 6
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
         let cue = NSMutableParagraphStyle()
         cue.paragraphSpacingBefore = size * 0.6
         cue.paragraphSpacing = size * 0.35
@@ -188,10 +217,10 @@ public final class Prompter: NSObject {
             guard !body.isEmpty else { continue }
             let attrs: [NSAttributedString.Key: Any] = isSpoken
                 ? [.font: NSFont.systemFont(ofSize: size, weight: .medium),
-                   .foregroundColor: NSColor.white, .paragraphStyle: spoken]
+                   .foregroundColor: NSColor.white, .paragraphStyle: spoken, .shadow: shadow]
                 : [.font: NSFont.systemFont(ofSize: max(13, size * 0.45), weight: .semibold),
                    .foregroundColor: NSColor(srgbRed: 1, green: 0.67, blue: 0, alpha: 0.9),
-                   .paragraphStyle: cue]
+                   .paragraphStyle: cue, .shadow: shadow]
             out.append(NSAttributedString(string: body + "\n", attributes: attrs))
         }
         // room after the last line, so it can scroll all the way up to the camera
@@ -269,6 +298,19 @@ public final class Prompter: NSObject {
         render()
     }
 
+    private func cycleBackground() {
+        let steps = Prompter.alphaSteps
+        let i = steps.firstIndex(where: { abs($0 - backgroundAlpha) < 0.01 }) ?? 0
+        backgroundAlpha = steps[(i + 1) % steps.count]
+        applyBackground()
+    }
+
+    private func applyBackground() {
+        root?.color = NSColor(white: 0.06, alpha: backgroundAlpha)
+        fade?.alpha = backgroundAlpha
+        opacityButton.title = backgroundAlpha < 0.01 ? "Clear" : "Bg \(Int((backgroundAlpha * 100).rounded()))%"
+    }
+
     private func updateSpeedLabel() {
         speedLabel.stringValue = String(format: "%.2g×", speed)
         speedLabel.alignment = .center
@@ -277,11 +319,12 @@ public final class Prompter: NSObject {
 
 /// Fades the text in at the top and out at the bottom of the prompter.
 private final class FadeOverlay: NSView {
+    var alpha: CGFloat = 0.94 { didSet { needsDisplay = true } }
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirty: NSRect) {
-        let bg = NSColor(white: 0.08, alpha: 0.94)
+        let bg = NSColor(white: 0.06, alpha: alpha)
         let h = min(60, bounds.height / 4)
         NSGradient(starting: bg, ending: bg.withAlphaComponent(0))?
             .draw(in: NSRect(x: 0, y: 0, width: bounds.width, height: h), angle: 90)
