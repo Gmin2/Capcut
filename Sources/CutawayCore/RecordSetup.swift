@@ -86,7 +86,8 @@ struct Source {
     static func all() async throws -> [Source] {
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         let me = Bundle.main.bundleIdentifier ?? "com.mintu.cutaway"
-        let mine = content.applications.filter { $0.bundleIdentifier == me }
+        // matched by process, not bundle id: the app list does not always carry ours
+        let mine = content.windows.filter { $0.owningApplication?.processID == getpid() }
         var out: [Source] = []
 
         for (i, d) in content.displays.enumerated() {
@@ -97,8 +98,7 @@ struct Source {
                               name: screen?.localizedName ?? "Display \(i + 1)",
                               detail: "\(d.width) × \(d.height)",
                               size: CGSize(width: d.width, height: d.height),
-                              filter: SCContentFilter(display: d, excludingApplications: mine,
-                                                      exceptingWindows: []),
+                              filter: SCContentFilter(display: d, excludingWindows: mine),
                               icon: nil))
         }
 
@@ -151,6 +151,7 @@ public final class RecordSetupView: ThemedView {
 
     private let cards = FlippedStack()
     private let canvas = AreaCanvas()
+    private let facecam = Facecam()
     private let sourceHint = Theme.label("", .meta, color: Theme.textTertiary)
     private let micButton = FillButton("Mic On", icon: .mic)
     private let cameraSwitch = Switch(true)
@@ -197,6 +198,8 @@ public final class RecordSetupView: ThemedView {
         let previewCard = Surface(Theme.inset)
         canvas.translatesAutoresizingMaskIntoConstraints = false
         previewCard.addSubview(canvas)
+        facecam.translatesAutoresizingMaskIntoConstraints = false
+        previewCard.addSubview(facecam)
         canvas.onAreaChange = { [weak self] area in
             self?.settings.area = area
             self?.settings.save()
@@ -237,6 +240,10 @@ public final class RecordSetupView: ThemedView {
             canvas.bottomAnchor.constraint(equalTo: previewCard.bottomAnchor),
             canvas.leadingAnchor.constraint(equalTo: previewCard.leadingAnchor),
             canvas.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor),
+            facecam.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor, constant: -28),
+            facecam.bottomAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: -28),
+            facecam.widthAnchor.constraint(equalTo: previewCard.widthAnchor, multiplier: 0.2),
+            facecam.heightAnchor.constraint(equalTo: facecam.widthAnchor, multiplier: 0.75),
 
             bar.topAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: 16),
             bar.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
@@ -263,11 +270,13 @@ public final class RecordSetupView: ThemedView {
             self?.settings.camera = on
             self?.settings.save()
             self?.syncControls()
+            self?.updateFacecam()
         }
         cameraMenu.onChange = { [weak self] name in
             guard let self else { return }
             self.settings.cameraID = self.cameras.first { $0.localizedName == name }?.uniqueID
             self.settings.save()
+            self.updateFacecam()
         }
         let settingsButton = FillButton("Settings", icon: .gear)
         settingsButton.onClick = { [weak self, weak settingsButton] in
@@ -336,6 +345,7 @@ public final class RecordSetupView: ThemedView {
             deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
             mediaType: .video, position: .unspecified).devices
         syncControls()
+        updateFacecam()
         Task { @MainActor in
             do {
                 self.sources = try await Source.all()
@@ -355,6 +365,16 @@ public final class RecordSetupView: ThemedView {
     public func deactivate() {
         timer?.invalidate()
         timer = nil
+        // the recorder needs the camera to itself
+        facecam.stop()
+    }
+
+    private func updateFacecam() {
+        if settings.camera, !cameras.isEmpty {
+            facecam.start(deviceID: settings.cameraID)
+        } else {
+            facecam.stop()
+        }
     }
 
     public func setRecording(_ live: Bool) {
@@ -704,5 +724,68 @@ final class AreaCanvas: ThemedView {
         let r = imageRect
         return CGPoint(x: min(max((p.x - r.minX) / r.width, 0), 1),
                        y: min(max((p.y - r.minY) / r.height, 0), 1))
+    }
+}
+
+/// Live camera in a bubble, so you can check framing and light before a take.
+/// Mirrored, the way a mirror looks, which is what people expect of themselves.
+final class Facecam: NSView {
+    private var session: AVCaptureSession?
+    private var deviceID: String?
+    private let preview = AVCaptureVideoPreviewLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 14
+        layer?.masksToBounds = true
+        layer?.borderWidth = 2
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        layer?.backgroundColor = NSColor.black.cgColor
+        preview.videoGravity = .resizeAspectFill
+        preview.setAffineTransform(CGAffineTransform(scaleX: -1, y: 1))
+        layer?.addSublayer(preview)
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        preview.frame = bounds
+    }
+
+    func start(deviceID: String?) {
+        if session != nil, deviceID == self.deviceID { return }
+        stop()
+        Task { @MainActor in
+            guard await WebcamRecorder.requestAccess() else {
+                Log.line("facecam: camera permission denied")
+                return
+            }
+            let device = deviceID.flatMap { AVCaptureDevice(uniqueID: $0) } ?? AVCaptureDevice.default(for: .video)
+            guard let device, let input = try? AVCaptureDeviceInput(device: device) else {
+                Log.line("facecam: no camera to show")
+                return
+            }
+            let session = AVCaptureSession()
+            guard session.canAddInput(input) else { return }
+            session.addInput(input)
+            self.preview.session = session
+            self.session = session
+            self.deviceID = deviceID
+            self.isHidden = false
+            DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
+            Log.line("facecam: showing \(device.localizedName)")
+        }
+    }
+
+    func stop() {
+        guard let session else { return }
+        self.session = nil
+        preview.session = nil
+        isHidden = true
+        // stopRunning blocks, so the recorder gets the camera once this returns
+        session.stopRunning()
     }
 }
