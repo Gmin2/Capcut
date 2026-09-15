@@ -591,6 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try await r.start(to: target.appendingPathComponent("display.mov"))
                 await MainActor.run {
                     if self.cameraOnly, let session = r.webcamSession { self.setup.showLive(session) }
+                    Prompter.shared.recordingStarted()
                     self.startTick()
                 }
             } catch {
@@ -608,7 +609,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         Task {
             do {
-                await MainActor.run { self.setup.releaseCamera() }
+                await MainActor.run {
+                    self.setup.releaseCamera()
+                    Prompter.shared.recordingStopped()
+                }
                 _ = try await r.stop()
                 await MainActor.run {
                     self.recorder = nil
@@ -768,6 +772,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autoprompter") {
+            // the panel is excluded from screen capture, so draw it directly
+            Prompter.shared.show()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                Prompter.shared.snapshot(to: URL(fileURLWithPath: base + "/prompter.png"))
+                // then roll it as a take would, to check it scrolls
+                Prompter.shared.recordingStarted()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+                    Prompter.shared.recordingStopped()
+                    Prompter.shared.snapshot(to: URL(fileURLWithPath: base + "/prompter-scrolled.png"))
+                }
+            }
+        }
         else if consume("autosetup") {
             showSetup()
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {

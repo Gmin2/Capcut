@@ -322,14 +322,14 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             Log.line("no windows for \(only), capturing the whole display")
         }
 
-        guard !excludeApps.isEmpty else {
-            return SCContentFilter(display: display, excludingWindows: [])
-        }
+        // our own windows never belong in a take: the prompter floats on top
+        // while recording, and the editor could be left open
         let hidden = content.windows.filter {
+            if $0.owningApplication?.processID == getpid() { return true }
             guard let id = $0.owningApplication?.bundleIdentifier else { return false }
             return excludeApps.contains(id)
         }
-        if !hidden.isEmpty {
+        if !excludeApps.isEmpty, !hidden.isEmpty {
             Log.line("excluding \(hidden.count) window(s) from \(excludeApps.joined(separator: ", "))")
         }
         return SCContentFilter(display: display, excludingWindows: hidden)

@@ -335,7 +335,8 @@ public final class RecordSetupView: ThemedView {
         }
 
         let cameraLabel = Theme.label("Camera:", .body, color: Theme.textSecondary)
-        let row1 = NSStackView(views: [startButton, micButton, cameraLabel, cameraSwitch, cameraMenu, settingsButton])
+        let scriptButton = FillButton("Script", icon: .transcript) { Prompter.shared.toggle() }
+        let row1 = NSStackView(views: [startButton, micButton, cameraLabel, cameraSwitch, cameraMenu, settingsButton, scriptButton])
         row1.spacing = 12
         row1.setCustomSpacing(8, after: cameraLabel)
         row1.setCustomSpacing(10, after: cameraSwitch)
