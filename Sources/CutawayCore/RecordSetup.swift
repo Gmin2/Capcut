@@ -158,6 +158,7 @@ public final class RecordSetupView: ThemedView {
     private let cards = FlippedStack()
     private let canvas = AreaCanvas()
     private let facecam = Facecam()
+    private let recPill = RecPill()
     private let sourceHint = Theme.label("", .meta, color: Theme.textTertiary)
     private let micButton = FillButton("Mic On", icon: .mic)
     private let cameraSwitch = Switch(true)
@@ -208,6 +209,9 @@ public final class RecordSetupView: ThemedView {
         previewCard.addSubview(canvas)
         facecam.translatesAutoresizingMaskIntoConstraints = false
         previewCard.addSubview(facecam)
+        recPill.translatesAutoresizingMaskIntoConstraints = false
+        recPill.isHidden = true
+        previewCard.addSubview(recPill)
         canvas.onAreaChange = { [weak self] area in
             self?.settings.area = area
             self?.settings.save()
@@ -268,6 +272,8 @@ public final class RecordSetupView: ThemedView {
             canvas.bottomAnchor.constraint(equalTo: previewCard.bottomAnchor),
             canvas.leadingAnchor.constraint(equalTo: previewCard.leadingAnchor),
             canvas.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor),
+            recPill.topAnchor.constraint(equalTo: previewCard.topAnchor, constant: 28),
+            recPill.leadingAnchor.constraint(equalTo: previewCard.leadingAnchor, constant: 28),
 
             bar.topAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: 16),
             bar.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
@@ -412,9 +418,30 @@ public final class RecordSetupView: ThemedView {
         }
     }
 
-    public func setRecording(_ live: Bool) {
+    public func setRecording(_ live: Bool, elapsed: Double = 0, paused: Bool = false) {
         startButton.title = live ? "Stop Recording" : "Start Recording"
         startButton.trailingChevron = !live
+        // nothing about the take can change once it is rolling
+        for c in [captureMenu, cameraMenu, micButton] as [Control] { c.isEnabled = !live }
+        cameraSwitch.isEnabled = !live && settings.capture != .camera
+        recPill.isHidden = !live
+        recPill.text = String(format: "%@ %d:%02d", paused ? "PAUSED" : "REC", Int(elapsed) / 60, Int(elapsed) % 60)
+    }
+
+    /// Camera only keeps this screen up while recording. The countdown runs
+    /// on the preview's own session; the take itself hands the camera to the
+    /// recorder and shows the recorder's session instead.
+    public func pausePreview() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    public func releaseCamera() {
+        facecam.stop(keepVisible: true)
+    }
+
+    public func showLive(_ session: AVCaptureSession) {
+        facecam.show(session)
     }
 
     private func syncControls() {
@@ -810,6 +837,13 @@ final class Facecam: NSView {
         preview.frame = bounds
     }
 
+    /// Shows a session someone else owns, like the recorder's.
+    func show(_ other: AVCaptureSession) {
+        stop(keepVisible: true)
+        preview.session = other
+        isHidden = false
+    }
+
     func start(deviceID: String?) {
         if session != nil, deviceID == self.deviceID { return }
         stop()
@@ -835,12 +869,35 @@ final class Facecam: NSView {
         }
     }
 
-    func stop() {
+    func stop(keepVisible: Bool = false) {
+        preview.session = nil
+        if !keepVisible { isHidden = true }
         guard let session else { return }
         self.session = nil
-        preview.session = nil
-        isHidden = true
+        deviceID = nil
         // stopRunning blocks, so the recorder gets the camera once this returns
         session.stopRunning()
+    }
+}
+
+/// Red "REC 0:12" tag over the live camera.
+final class RecPill: ThemedView {
+    var text = "REC 0:00" { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+
+    private var attrs: [NSAttributedString.Key: Any] {
+        [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.white]
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: ceil((text as NSString).size(withAttributes: attrs).width) + 34, height: 24)
+    }
+
+    override func draw(_ dirty: NSRect) {
+        NSColor.black.withAlphaComponent(0.6).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+        Theme.record.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 10, y: bounds.midY - 4, width: 8, height: 8)).fill()
+        let size = (text as NSString).size(withAttributes: attrs)
+        (text as NSString).draw(at: NSPoint(x: 24, y: bounds.midY - size.height / 2), withAttributes: attrs)
     }
 }

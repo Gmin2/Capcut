@@ -511,8 +511,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Hide first, then count down, so the window is out of shot before the
         // first frame rather than being cut out afterwards.
-        setup.deactivate()
-        window.orderOut(nil)
+        // camera only has no screen in the shot, so the window stays up and
+        // you can watch yourself; every other mode gets out of the way
+        if RecordSettings.load().capture == .camera, !setup.isHidden {
+            setup.pausePreview()
+        } else {
+            setup.deactivate()
+            window.orderOut(nil)
+        }
         countdown.run(from: countdownSeconds) { [weak self] in
             self?.beginRecording()
         }
@@ -581,8 +587,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             do {
+                if self.cameraOnly { await MainActor.run { self.setup.releaseCamera() } }
                 try await r.start(to: target.appendingPathComponent("display.mov"))
-                await MainActor.run { self.startTick() }
+                await MainActor.run {
+                    if self.cameraOnly, let session = r.webcamSession { self.setup.showLive(session) }
+                    self.startTick()
+                }
             } catch {
                 Log.line("ERROR: \(error)")
                 await MainActor.run { self.recorder = nil; self.refreshRecordUI() }
@@ -598,6 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         Task {
             do {
+                await MainActor.run { self.setup.releaseCamera() }
                 _ = try await r.stop()
                 await MainActor.run {
                     self.recorder = nil
@@ -648,7 +659,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let r = recorder
         let live = r?.isRecording ?? false
         sidebar.newButton.title = live ? "Stop Recording" : "New Recording"
-        setup.setRecording(live)
+        setup.setRecording(live, elapsed: r?.elapsed ?? 0, paused: r?.isPaused ?? false)
         if live, let r {
             statusLabel.stringValue = String(format: "%@ %.1fs", r.isPaused ? "paused" : "recording",
                                              r.elapsed)

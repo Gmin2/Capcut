@@ -26,6 +26,7 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private var events: EventRecorder?
     private var webcam: WebcamRecorder?
+    public var webcamSession: AVCaptureSession? { webcam?.captureSession }
     private var micWriter: AudioWriter?
     private var systemWriter: AudioWriter?
 
