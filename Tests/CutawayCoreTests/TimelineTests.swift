@@ -432,3 +432,14 @@ final class HistoryGroupTests: XCTestCase {
         XCTAssertEqual(h.depth.undo, 2)
     }
 }
+
+final class SceneDecodingTests: XCTestCase {
+
+    func testSceneWithoutTransitionStillDecodes() throws {
+        let json = #"{"scenes": [{"at": 0, "layout": "talkingHead"}]}"#
+        let p = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
+        XCTAssertEqual(p.scenes.count, 1)
+        XCTAssertEqual(p.scenes.first?.layout, "talkingHead")
+        XCTAssertEqual(p.scenes.first?.transition ?? 0, 0.6, accuracy: 0.001)
+    }
+}

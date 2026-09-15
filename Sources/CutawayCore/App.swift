@@ -564,7 +564,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .display: break
         case .window: r.onlyApp = settings.app
         case .area: r.area = settings.areaPoints(of: settings.displayID ?? CGMainDisplayID())
+        case .camera:
+            // the pipeline still wants a screen track, so keep it tiny; the
+            // edit only ever shows the camera
+            r.captureWebcam = true
+            r.captureSystemAudio = false
+            r.captureKeys = false
+            r.area = CGRect(x: 0, y: 0, width: 320, height: 180)
         }
+        cameraOnly = settings.capture == .camera
         systemLevel = settings.desktopAudio
         r.onStateChange = { [weak self] in
             DispatchQueue.main.async { self?.refreshRecordUI() }
@@ -600,8 +608,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.sidebar.reload(selected: take)
                         self.open(take)
                         // start the system track where the setup slider was
-                        if var p = Project.load(from: take), p.audio.system != self.systemLevel {
+                        if var p = Project.load(from: take) {
                             p.audio.system = self.systemLevel
+                            if self.cameraOnly {
+                                p.scenes = [Scene(at: 0, layout: "talkingHead")]
+                                p.zooms = []
+                                p.callouts = []
+                                p.deviceFrame = .none
+                            }
                             try? p.write(to: take)
                         }
                     }
@@ -628,6 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var pendingTake: URL?
     private var systemLevel = 0.55
+    private var cameraOnly = false
 
     private func refreshRecordUI() {
         let r = recorder
