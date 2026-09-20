@@ -50,6 +50,9 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
     private let folderLabel = Theme.label("", .meta, color: Theme.textSecondary)
     private var permissionRows: [PermissionRow] = []
 
+    /// Set by the app, so changing a shortcut re-registers it at once.
+    nonisolated(unsafe) public static var onShortcutChange: (() -> Void)?
+
     public static func show() {
         if let shared {
             shared.refresh()
@@ -63,8 +66,8 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
     static var isOpen: Bool { shared != nil }
 
     private override init() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 620),
-                          styleMask: [.titled, .closable, .fullSizeContentView],
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 720),
+                          styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         super.init()
         window.title = "Settings"
@@ -134,13 +137,23 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
         }
 
         stack.addArrangedSubview(SectionHeader("Shortcuts", icon: .keyboard))
-        for (keys, what) in [("⌘⇧6", "Capture an area, space for a window"),
-                             ("⌘⇧7", "Capture the whole screen"),
-                             ("⌘⇧5", "Scrolling capture"),
-                             ("⌘⇧8", "Start or stop recording"),
-                             ("⌘⇧9", "Pause a recording"),
-                             ("⌘⇧R", "Capture the same area again"),
-                             ("⌘⇧H", "Capture history"),
+        for action in Hotkey.Action.allCases {
+            let label = Theme.label(action.title, .body)
+            label.widthAnchor.constraint(equalToConstant: 230).isActive = true
+            let field = ShortcutField(action: action) { SettingsWindow.onShortcutChange?() }
+            let line = NSStackView(views: [label, field])
+            line.spacing = 12
+            line.alignment = .centerY
+            field.widthAnchor.constraint(equalToConstant: 120).isActive = true
+            field.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            stack.addArrangedSubview(line)
+        }
+        stack.addArrangedSubview(Theme.label(
+            "Click a shortcut, then press the keys you want. Esc puts the default back.",
+            .meta, color: Theme.textTertiary))
+
+        // the rest are menu items, which macOS owns
+        for (keys, what) in [("⌘⇧H", "Capture history"),
                              ("⌘⇧E", "Mark up the last capture"),
                              ("⌘⇧T", "Copy the text in the last capture"),
                              ("⌘⇧P", "Pin the last capture")] {
@@ -284,5 +297,72 @@ final class PermissionRow: ThemedView {
     private func openSettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(kind.settingsPane)")
         if let url { NSWorkspace.shared.open(url) }
+    }
+}
+
+/// Click it, press the keys, done. Esc puts the default back.
+final class ShortcutField: Control {
+    private let action: Hotkey.Action
+    private let onChange: () -> Void
+    private var listening = false { didSet { needsDisplay = true } }
+    private var monitor: Any?
+
+    init(action: Hotkey.Action, onChange: @escaping () -> Void) {
+        self.action = action
+        self.onChange = onChange
+        super.init(frame: .zero)
+        onClick = { [weak self] in self?.listen() }
+        toolTip = "Click, then press the keys"
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+    }
+
+    override func draw(_ dirty: NSRect) {
+        let r = bounds.insetBy(dx: 0.75, dy: 0.75)
+        let path = NSBezierPath(roundedRect: r, xRadius: Theme.radiusControl, yRadius: Theme.radiusControl)
+        (listening ? Theme.canvas : fillColor).setFill()
+        path.fill()
+        if listening {
+            path.lineWidth = Theme.borderSelected
+            Theme.accentBorder.setStroke()
+            path.stroke()
+        }
+        let text = (listening ? "press keys…" : action.combo.label) as NSString
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: Theme.Text.bodyStrong.font,
+            .foregroundColor: listening ? Theme.textTertiary : Theme.textPrimary,
+        ]
+        let size = text.size(withAttributes: attrs)
+        text.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2),
+                  withAttributes: attrs)
+    }
+
+    private func listen() {
+        guard !listening else { return }
+        listening = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            self.stop()
+            if event.keyCode == 53 {                       // esc: back to the default
+                self.action.set(nil)
+            } else if let combo = Hotkey.Combo(event: event) {
+                self.action.set(combo)
+            } else {
+                Log.line("a shortcut needs a modifier, or it would fire while typing")
+            }
+            self.needsDisplay = true
+            self.onChange()
+            return nil
+        }
+    }
+
+    private func stop() {
+        listening = false
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
     }
 }
