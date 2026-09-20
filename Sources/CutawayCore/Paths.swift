@@ -61,6 +61,23 @@ public enum Paths {
         }
     }
 
+    /// Stills live beside other pictures, not with the takes: a screenshot is
+    /// a file you send, not a project you edit.
+    public static var shotsRoot: URL {
+        if let override = ProcessInfo.processInfo.environment["CUTAWAY_SHOTS"] {
+            return URL(fileURLWithPath: NSString(string: override).expandingTildeInPath)
+        }
+        let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSString(string: "~/Pictures").expandingTildeInPath)
+        return pictures.appendingPathComponent("Cutaway")
+    }
+
+    public static func newShot() -> URL {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        return shotsRoot.appendingPathComponent("Shot \(f.string(from: Date())).png")
+    }
+
     public static var support: URL {
         URL(fileURLWithPath: NSString(string: "~/Library/Application Support/Cutaway")
             .expandingTildeInPath)

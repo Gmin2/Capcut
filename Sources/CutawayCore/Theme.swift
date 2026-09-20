@@ -68,6 +68,25 @@ public enum Theme {
         return f
     }
 
+    /// The markup palette, in the order the grid shows them: strong colours
+    /// first, because a mark is meant to be seen.
+    public static let markColors: [NSColor] = [
+        NSColor(srgbRed: 0.91, green: 0.24, blue: 0.20, alpha: 1),
+        NSColor(srgbRed: 0.96, green: 0.55, blue: 0.10, alpha: 1),
+        NSColor(srgbRed: 0.98, green: 0.80, blue: 0.16, alpha: 1),
+        NSColor(srgbRed: 0.25, green: 0.70, blue: 0.36, alpha: 1),
+        NSColor(srgbRed: 0.15, green: 0.60, blue: 0.86, alpha: 1),
+        NSColor(srgbRed: 0.35, green: 0.36, blue: 0.86, alpha: 1),
+        NSColor(srgbRed: 0.72, green: 0.29, blue: 0.79, alpha: 1),
+        NSColor(srgbRed: 0.12, green: 0.12, blue: 0.13, alpha: 1),
+        NSColor(srgbRed: 0.40, green: 0.43, blue: 0.47, alpha: 1),
+        NSColor.white,
+        NSColor(srgbRed: 0.00, green: 0.66, blue: 0.62, alpha: 1),
+        NSColor(srgbRed: 0.85, green: 0.20, blue: 0.47, alpha: 1),
+        NSColor(srgbRed: 0.55, green: 0.42, blue: 0.29, alpha: 1),
+        NSColor(srgbRed: 0.45, green: 0.55, blue: 0.16, alpha: 1),
+    ]
+
     /// Light unless the user picked otherwise. Dark is tuned but light is the
     /// reference we matched first.
     public static var mode: String {

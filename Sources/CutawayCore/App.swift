@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 import Foundation
 import AVFoundation
 
@@ -60,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hk = Hotkey()
         hk.register(.record) { [weak self] in self?.toggleRecord() }
         hk.register(.pause) { [weak self] in self?.togglePause() }
+        hk.register(.captureArea) { Capture.area() }
+        hk.register(.captureScreen) { Capture.fullScreen() }
         hotkey = hk
 
         sidebar.reload(selected: recordingDir)
@@ -432,6 +435,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appItem.submenu = appMenu
         main.addItem(appItem)
 
+        let captureItem = NSMenuItem()
+        let capture = NSMenu(title: "Capture")
+        let areaItem = NSMenuItem(title: "Capture Area", action: #selector(captureArea),
+                                  keyEquivalent: "6")
+        areaItem.keyEquivalentModifierMask = [.command, .shift]
+        let screenItem = NSMenuItem(title: "Capture Screen", action: #selector(captureScreen),
+                                    keyEquivalent: "7")
+        screenItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(areaItem)
+        capture.addItem(screenItem)
+        let scrollItem = NSMenuItem(title: "Scrolling Capture", action: #selector(captureScrolling),
+                                    keyEquivalent: "5")
+        scrollItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(scrollItem)
+
+        let iconsItem = NSMenuItem(title: "Hide Desktop Icons", action: #selector(toggleIcons),
+                                   keyEquivalent: "")
+        iconsItem.state = Capture.desktopIconsHidden ? .on : .off
+        capture.addItem(iconsItem)
+
+        let timerItem = NSMenuItem(title: "Self Timer", action: nil, keyEquivalent: "")
+        let timerMenu = NSMenu()
+        for seconds in [0, 3, 5, 10] {
+            let item = NSMenuItem(title: seconds == 0 ? "Off" : "\(seconds) seconds",
+                                  action: #selector(pickTimer(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = seconds
+            item.state = Capture.timer == seconds ? .on : .off
+            timerMenu.addItem(item)
+        }
+        timerItem.submenu = timerMenu
+        capture.addItem(timerItem)
+
+        let textItem = NSMenuItem(title: "Copy Text from Last Capture",
+                                  action: #selector(copyTextFromLast), keyEquivalent: "t")
+        textItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(textItem)
+
+        let historyItem = NSMenuItem(title: "Capture History", action: #selector(showHistory),
+                                     keyEquivalent: "h")
+        historyItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(historyItem)
+
+        let pinItem = NSMenuItem(title: "Pin Last Capture", action: #selector(pinLast),
+                                 keyEquivalent: "p")
+        pinItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(pinItem)
+
+        capture.addItem(.separator())
+        let markupItem = NSMenuItem(title: "Markup Last Capture", action: #selector(markupLast),
+                                    keyEquivalent: "e")
+        markupItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(markupItem)
+        capture.items.forEach { $0.target = self }
+        captureItem.submenu = capture
+        main.addItem(captureItem)
+
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Undo", action: #selector(undo), keyEquivalent: "z")
@@ -444,6 +504,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(editItem)
 
         NSApp.mainMenu = main
+    }
+
+    @objc private func captureArea() { Capture.area() }
+    @objc private func captureScreen() { Capture.fullScreen() }
+
+    @objc private func captureScrolling() {
+        Task { @MainActor in Capture.scrolling() }
+    }
+
+    @objc private func toggleIcons(_ item: NSMenuItem) {
+        Capture.desktopIconsHidden.toggle()
+        item.state = Capture.desktopIconsHidden ? .on : .off
+    }
+
+    @objc private func pickTimer(_ item: NSMenuItem) {
+        Capture.timer = item.tag
+        item.menu?.items.forEach { $0.state = $0.tag == item.tag ? .on : .off }
+    }
+
+    @objc private func showHistory() {
+        Task { @MainActor in CaptureHistory.show() }
+    }
+
+    @objc private func pinLast() {
+        guard let last = Capture.lastShot() else {
+            Log.line("no capture yet, press ⌘⇧6")
+            return
+        }
+        Task { @MainActor in Pin.show(url: last) }
+    }
+
+    @objc private func copyTextFromLast() {
+        guard let last = Capture.lastShot(),
+              let image = NSImage(contentsOf: last)?
+                .cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            Log.line("no capture yet, press ⌘⇧6")
+            return
+        }
+        Task { @MainActor in _ = await TextInImage.copyEverything(from: image) }
+    }
+
+    @objc private func markupLast() {
+        guard let last = Capture.lastShot() else {
+            Log.line("no capture yet, press ⌘⇧6")
+            return
+        }
+        AnnotateWindow.show(url: last)
     }
 
     private func refreshHistoryButtons() {
@@ -772,6 +879,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autoscroll") {
+            Task { @MainActor in
+                let session = ScrollingSession(display: CGMainDisplayID(),
+                                               region: CGRect(x: 100, y: 100, width: 600, height: 400))
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    session.stop()
+                }
+                await session.run()
+            }
+        }
+        else if consume("autohistory") {
+            Task { @MainActor in
+                CaptureHistory.show()
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                let onDisk = CaptureHistory.allShots().count
+                Log.line("history: \(CaptureHistory.shotCount == onDisk ? "PASS" : "FAIL") "
+                         + "\(CaptureHistory.shotCount) cards for \(onDisk) file(s)")
+                try? await Snapshot.captureWindow(
+                    bundleID: Bundle.main.bundleIdentifier ?? "com.mintu.cutaway",
+                    titled: "Captures", to: URL(fileURLWithPath: base + "/history.png"))
+            }
+        }
+        else if consume("autopin") {
+            Task { @MainActor in
+                Pin.show(image: AppDelegate.checkerboard(width: 600, height: 400), url: nil)
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                Log.line("pin: \(Pin.count == 1 ? "PASS" : "FAIL") \(Pin.count) window(s)")
+                try? await Snapshot.captureWindow(
+                    bundleID: Bundle.main.bundleIdentifier ?? "com.mintu.cutaway",
+                    to: URL(fileURLWithPath: base + "/pin.png"))
+            }
+        }
+        else if consume("autoocr") {
+            Task { @MainActor in
+                let image = AppDelegate.textSample()
+                let lines = await TextInImage.read(image)
+                let wanted = "HELLO CUTAWAY 42"
+                let ok = lines.contains { $0.uppercased().contains(wanted) }
+                Log.line("ocr: \(ok ? "PASS" : "FAIL") read \(lines)")
+            }
+        }
+        else if consume("autowindowshot") {
+            Task { @MainActor in
+                guard let content = try? await SCShareableContent.excludingDesktopWindows(
+                    true, onScreenWindowsOnly: true) else { return }
+                let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+                let me = getpid()
+                let candidates = content.windows.filter {
+                    $0.windowLayer == 0 && $0.frame.width > 200 && $0.frame.height > 120
+                        && $0.owningApplication?.processID != me
+                        && !SelectionOverlay.notWindows.contains($0.owningApplication?.bundleIdentifier ?? "")
+                }
+                guard let target = candidates.max(by: { $0.frame.width < $1.frame.width }) else {
+                    Log.line("window pick: FAIL nothing to pick")
+                    return
+                }
+                let box = SelectionOverlay.appKitFrame(target.frame, mainHeight: mainHeight)
+                let centre = NSPoint(x: box.midX, y: box.midY)
+                let back = SelectionOverlay.appKitFrame(
+                    CGRect(x: box.minX, y: mainHeight - box.maxY, width: box.width, height: box.height),
+                    mainHeight: mainHeight)
+                Log.line("window pick: \(back == box ? "PASS" : "FAIL") frame round trip \(centre.x != 0)")
+                await Capture.shoot(window: target)
+                Log.line("window pick: captured \(target.title ?? "?") "
+                         + "\(Int(target.frame.width))x\(Int(target.frame.height)) pts")
+            }
+        }
+        else if consume("autoannotate") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                let w = AnnotateWindow.show(image: AppDelegate.checkerboard(), url: nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    w.selfCheck(writingTo: Paths.support.appendingPathComponent("annotate-test.png"))
+                    Task {
+                        try? await Task.sleep(nanoseconds: 600_000_000)
+                        try? await Snapshot.captureWindow(
+                            bundleID: Bundle.main.bundleIdentifier ?? "com.mintu.cutaway",
+                            titled: "Capture",
+                            to: URL(fileURLWithPath: base + "/annotate.png"))
+                    }
+                }
+            }
+        }
+        else if consume("autoshot") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                Task { await Capture.shoot(display: CGMainDisplayID(),
+                                           region: CGRect(x: 120, y: 90, width: 640, height: 400)) }
+            }
+        }
         else if consume("autoprompter") {
             // the panel is excluded from screen capture, so draw it directly
             Prompter.shared.show()
@@ -884,6 +1080,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         undo()
         let undone = project()?.trimStart ?? -1
         report("undo reverts trim", undone < 0.05, String(format: "trimStart %.2f", undone))
+    }
+
+    /// A picture with known words in it, to check the reader against.
+    static func textSample() -> CGImage {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 900, pixelsHigh: 300,
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: 900, height: 300).fill()
+        ("HELLO CUTAWAY 42" as NSString).draw(
+            at: NSPoint(x: 60, y: 120),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 64, weight: .semibold),
+                             .foregroundColor: NSColor.black])
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.cgImage!
+    }
+
+    /// A picture to draw on that has no private content in it.
+    static func checkerboard(width: Int = 1200, height: Int = 800) -> CGImage {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor(white: 0.93, alpha: 1).setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        NSColor(white: 0.82, alpha: 1).setFill()
+        for row in 0..<(height / 80) {
+            for col in 0..<(width / 80) where (row + col) % 2 == 0 {
+                NSRect(x: col * 80, y: row * 80, width: 80, height: 80).fill()
+            }
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.cgImage!
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }

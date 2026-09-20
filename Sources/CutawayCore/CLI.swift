@@ -32,6 +32,7 @@ public enum CLI {
             case "pack":     return try pack(args)
             case "trim":     return try trim(args)
             case "recut":    return try recut(args)
+            case "shots":    return shots(args)
             case "import":   return try await importVideo(args)
             case "windows":  return try await windows()
             case "displays": return try await displays()
@@ -66,7 +67,7 @@ public enum CLI {
 
     static func needsAppLaunch(_ args: [String]) -> Bool {
         ["record", "snap", "doctor", "windows", "displays", "transcribe",
-         "export", "still", "pitch", "trim", "recut", "pack"]
+         "export", "still", "pitch", "trim", "recut", "pack", "shots"]
             .contains(args.first ?? "")
     }
 
@@ -182,6 +183,10 @@ public enum CLI {
               --area records part of the display, in points from its top left.
               Use `cutaway windows` to find bundle ids and `cutaway displays`
               to find display ids.
+
+          shots [--trash NAME]
+              Lists captures in ~/Pictures/Cutaway, newest first. --trash moves
+              the first one whose name contains NAME to the bin.
 
           recut [--in DIR] [--none]
               Rebuilds the cut list of a take already recorded. --none keeps
@@ -318,6 +323,35 @@ public enum CLI {
         emit("recut: \(before) -> \(p.segments.count) segments, "
              + String(format: "%.1fs of %.1fs kept", p.segments.isEmpty ? m.screen.duration : kept,
                       m.screen.duration))
+        return 0
+    }
+
+    /// Captures on disk, and a way to bin one without opening the app.
+    static func shots(_ args: [String]) -> Int32 {
+        let opts = Options(args)
+        let all = CaptureHistory.allShots()
+        if let name = opts.value("--trash") {
+            guard let match = all.first(where: { $0.lastPathComponent.contains(name) }) else {
+                emit("no capture matching \(name)")
+                return 1
+            }
+            do {
+                try FileManager.default.trashItem(at: match, resultingItemURL: nil)
+                emit("binned \(match.lastPathComponent)")
+                return 0
+            } catch {
+                emit("could not bin it: \(error.localizedDescription)")
+                return 1
+            }
+        }
+        if all.isEmpty {
+            emit("no captures yet")
+            return 0
+        }
+        for url in all {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            emit("\(url.lastPathComponent)  \(size / 1024) KB")
+        }
         return 0
     }
 

@@ -24,6 +24,13 @@ public final class Hotkey {
         public static let pause = Combo(keyCode: UInt32(kVK_ANSI_9),
                                         modifiers: UInt32(cmdKey | shiftKey),
                                         label: "⌘⇧9")
+        /// ⌘⇧6 grabs an area, ⌘⇧7 the whole screen. Again clear of ⌘⇧3/4/5.
+        public static let captureArea = Combo(keyCode: UInt32(kVK_ANSI_6),
+                                              modifiers: UInt32(cmdKey | shiftKey),
+                                              label: "⌘⇧6")
+        public static let captureScreen = Combo(keyCode: UInt32(kVK_ANSI_7),
+                                                modifiers: UInt32(cmdKey | shiftKey),
+                                                label: "⌘⇧7")
     }
 
     private var refs: [EventHotKeyRef?] = []
