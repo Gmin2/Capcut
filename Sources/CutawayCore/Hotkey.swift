@@ -31,6 +31,10 @@ public final class Hotkey {
         public static let captureScreen = Combo(keyCode: UInt32(kVK_ANSI_7),
                                                 modifiers: UInt32(cmdKey | shiftKey),
                                                 label: "⌘⇧7")
+        /// Same area again, for a run of shots of the same thing.
+        public static let captureRepeat = Combo(keyCode: UInt32(kVK_ANSI_R),
+                                                modifiers: UInt32(cmdKey | shiftKey),
+                                                label: "⌘⇧R")
     }
 
     private var refs: [EventHotKeyRef?] = []

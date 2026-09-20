@@ -531,9 +531,10 @@ public final class Dropdown: Control {
     public var focused = false { didSet { needsDisplay = true } }
     private var open = false
 
-    public init(_ options: [String], selected: String) {
+    public init(_ options: [String], selected: String, onChange: ((String) -> Void)? = nil) {
         self.options = options
         self.selected = selected
+        self.onChange = onChange
         super.init(frame: .zero)
         onClick = { [weak self] in self?.showMenu() }
     }

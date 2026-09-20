@@ -67,6 +67,7 @@ public enum Paths {
         if let override = ProcessInfo.processInfo.environment["CUTAWAY_SHOTS"] {
             return URL(fileURLWithPath: NSString(string: override).expandingTildeInPath)
         }
+        if let chosen = Prefs.saveFolder { return chosen }
         let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSString(string: "~/Pictures").expandingTildeInPath)
         return pictures.appendingPathComponent("Cutaway")
@@ -75,7 +76,16 @@ public enum Paths {
     public static func newShot() -> URL {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        return shotsRoot.appendingPathComponent("Shot \(f.string(from: Date())).png")
+        let stamp = f.string(from: Date())
+        let ext = Prefs.format.ext
+        var url = shotsRoot.appendingPathComponent("Shot \(stamp).\(ext)")
+        // two captures inside the same second must not overwrite each other
+        var n = 2
+        while FileManager.default.fileExists(atPath: url.path), n < 100 {
+            url = shotsRoot.appendingPathComponent("Shot \(stamp) (\(n)).\(ext)")
+            n += 1
+        }
+        return url
     }
 
     public static var support: URL {

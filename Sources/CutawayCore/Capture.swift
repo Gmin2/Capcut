@@ -14,6 +14,21 @@ public enum Capture {
         set { UserDefaults.standard.set(newValue, forKey: "capture.timer") }
     }
 
+    /// The last area dragged out, so it can be taken again without dragging.
+    nonisolated(unsafe) private static var lastArea: (rect: CGRect, display: CGDirectDisplayID)?
+
+    @MainActor
+    public static func repeatLast() {
+        guard let last = lastArea else {
+            Log.line("no area captured yet, press ⌘⇧6")
+            return
+        }
+        Task { @MainActor in
+            await countdown()
+            await shoot(display: last.display, region: last.rect)
+        }
+    }
+
     public static func area() {
         Task { @MainActor in
             guard let picked = await SelectionOverlay.pick() else { return }
@@ -84,6 +99,8 @@ public enum Capture {
 
             let bounds = CGRect(x: 0, y: 0, width: CGFloat(display.width), height: CGFloat(display.height))
             let area = (region?.integral.intersection(bounds)).flatMap { $0.width >= 8 && $0.height >= 8 ? $0 : nil }
+            // remember it however the capture was started, so ⌘⇧R always works
+            if let area { lastArea = (area, display.displayID) }
             let config = SCStreamConfiguration()
             config.width = Int((area ?? bounds).width * scale)
             config.height = Int((area ?? bounds).height * scale)
@@ -101,18 +118,69 @@ public enum Capture {
 
     @MainActor
     static func finish(_ image: CGImage) {
+        flash()
+        if Prefs.afterCapture == .copyOnly {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([NSImage(cgImage: image,
+                                     size: NSSize(width: image.width, height: image.height))])
+            Log.line("capture \(image.width)x\(image.height) -> clipboard only")
+            return
+        }
+
         let url = Paths.newShot()
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
-            try Still.write(image, to: url)
+            try write(image, to: url)
         } catch {
             Log.line("ERROR: could not save the capture, \(error.localizedDescription)")
             return
         }
         copyToClipboard(url: url, image: image)
         Log.line("capture \(image.width)x\(image.height) -> \(url.lastPathComponent)")
-        Shelf.shared.show(url: url, image: image)
+        switch Prefs.afterCapture {
+        case .markup: AnnotateWindow.show(url: url)
+        case .shelf, .copyOnly: Shelf.shared.show(url: url, image: image)
+        }
+    }
+
+    /// PNG unless JPEG was asked for, which is worth it for a photo-heavy shot.
+    static func write(_ image: CGImage, to url: URL) throws {
+        guard Prefs.format == .jpeg else {
+            try Still.write(image, to: url)
+            return
+        }
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else {
+            try Still.write(image, to: url)
+            return
+        }
+        try data.write(to: url)
+    }
+
+    /// A white blink over what was taken, and the shutter, so a capture is
+    /// never silent and invisible.
+    @MainActor
+    static func flash(_ rect: CGRect? = nil, on screen: NSScreen? = nil) {
+        if Prefs.playsSound { NSSound(named: "Grab")?.play() }
+        let target = screen ?? NSScreen.main
+        guard let target else { return }
+        let area = rect ?? target.frame
+        let w = NSWindow(contentRect: area, styleMask: [.borderless], backing: .buffered, defer: false)
+        w.level = .screenSaver
+        w.isOpaque = false
+        w.backgroundColor = .white
+        w.alphaValue = 0.55
+        w.ignoresMouseEvents = true
+        w.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        w.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            w.animator().alphaValue = 0
+        } completionHandler: {
+            w.orderOut(nil)
+        }
     }
 
     /// Captures the same area over and over while you scroll, then joins the
