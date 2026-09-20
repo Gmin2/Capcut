@@ -76,6 +76,21 @@ public struct ExportPreset {
         name: "gif", size: CGSize(width: 960, height: 540), fps: 15,
         codec: .hevc, bitrate: 8_000_000, isGIF: true)
 
+    /// Named for where the video is going, because that is how anyone
+    /// actually picks: h264 everywhere but YouTube, which takes the better
+    /// codec, and 1080p everywhere because every platform re-encodes anyway.
+    public static let x = ExportPreset(
+        name: "X", size: CGSize(width: 1920, height: 1080), fps: 30,
+        codec: .h264, bitrate: 10_000_000)
+
+    public static let linkedin = ExportPreset(
+        name: "LinkedIn", size: CGSize(width: 1920, height: 1080), fps: 30,
+        codec: .h264, bitrate: 10_000_000)
+
+    public static let youtube = ExportPreset(
+        name: "YouTube", size: CGSize(width: 1920, height: 1080), fps: 60,
+        codec: .hevc, bitrate: 20_000_000)
+
     public static let named: [String: ExportPreset] = [
         "1080p": .hd, "hd": .hd,
         "4k": .uhd, "uhd": .uhd,
@@ -83,10 +98,13 @@ public struct ExportPreset {
         "vertical": .vertical, "9:16": .vertical, "reel": .vertical,
         "square": .square, "1:1": .square,
         "gif": .gif,
+        "x": .x, "twitter": .x,
+        "linkedin": .linkedin,
+        "youtube": .youtube, "yt": .youtube,
     ]
 
     public static var allNames: [String] {
-        ["1080p", "4k", "h264", "vertical", "square", "gif"]
+        ["1080p", "4k", "h264", "x", "linkedin", "youtube", "vertical", "square", "gif"]
     }
 }
 

@@ -5,6 +5,12 @@ import AppKit
 /// timeline uses.
 public final class InspectorView: ThemedView {
     private let exportButton = FillButton("Export", icon: .download)
+    /// Which format Export uses. Nil is the project's own size.
+    public var onExportPreset: ((String?) -> Void)?
+
+    @objc private func pickExportPreset(_ item: NSMenuItem) {
+        onExportPreset?(item.representedObject as? String)
+    }
 
     /// Greyed out while a render runs, so it cannot be started twice.
     public func setExporting(_ busy: Bool) {
@@ -30,7 +36,20 @@ public final class InspectorView: ThemedView {
             self.showAppearanceMenu(from: gear)
         }
         let export = exportButton
+        export.trailingChevron = true
         export.onClick = { [weak self] in self?.onExport?() }
+        export.onChevron = { [weak self, weak export] in
+            guard let self, let export else { return }
+            let menu = NSMenu()
+            for name in ExportPreset.allNames {
+                let item = NSMenuItem(title: ExportPreset.named[name]?.name ?? name,
+                                      action: #selector(self.pickExportPreset(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = name
+                menu.addItem(item)
+            }
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: export.bounds.height + 4), in: export)
+        }
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
