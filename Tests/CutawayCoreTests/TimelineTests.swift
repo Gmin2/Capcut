@@ -613,3 +613,68 @@ final class SpeedTests: XCTestCase {
         XCTAssertEqual(map.outputDuration, 20 + 2.5, accuracy: 0.01)
     }
 }
+
+final class CutsTests: XCTestCase {
+
+    private func transcript(_ words: [(String, Double, Double)]) -> Transcript {
+        var t = Transcript()
+        t.segments = words.map {
+            Transcript.Segment(t: $0.1, duration: $0.2, text: $0.0, confidence: 1)
+        }
+        t.text = words.map(\.0).joined(separator: " ")
+        return t
+    }
+
+    func testRemovingTheMiddleLeavesTwoPieces() {
+        let out = Cuts.remove(4...6, from: [], duration: 10)
+        XCTAssertEqual(out.count, 2)
+        XCTAssertEqual(out[0].sourceEnd, 4, accuracy: 0.001)
+        XCTAssertEqual(out[1].sourceStart, 6, accuracy: 0.001)
+        XCTAssertEqual(Cuts.kept(out, duration: 10), 8, accuracy: 0.001)
+    }
+
+    func testRemovingTheStartKeepsOnePiece() {
+        let out = Cuts.remove(0...3, from: [], duration: 10)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].sourceStart, 3, accuracy: 0.001)
+    }
+
+    func testRemovingAcrossAnExistingCutWorks() {
+        let first = Cuts.remove(4...6, from: [], duration: 10)
+        let second = Cuts.remove(2...8, from: first, duration: 10)
+        XCTAssertEqual(Cuts.kept(second, duration: 10), 4, accuracy: 0.001)
+        XCTAssertFalse(Cuts.isKept(5, in: second, duration: 10))
+        XCTAssertTrue(Cuts.isKept(1, in: second, duration: 10))
+    }
+
+    func testRestorePutsASpanBackAndMerges() {
+        let cut = Cuts.remove(4...6, from: [], duration: 10)
+        let back = Cuts.restore(4...6, into: cut, duration: 10)
+        XCTAssertEqual(back.count, 1, "the take is whole again, in one piece")
+        XCTAssertEqual(Cuts.kept(back, duration: 10), 10, accuracy: 0.001)
+    }
+
+    func testFillersAreFoundWhateverThePunctuation() {
+        let t = transcript([("So", 0, 0.3), ("um,", 0.4, 0.3), ("this", 0.8, 0.3),
+                            ("Uh", 1.2, 0.2), ("works", 1.5, 0.4)])
+        let spans = Cuts.fillerSpans(in: t)
+        XCTAssertEqual(spans.count, 2)
+        XCTAssertEqual(spans[0].lowerBound, 0.36, accuracy: 0.001)
+    }
+
+    func testSilencesAreTheGapsBetweenWords() {
+        let t = transcript([("one", 0, 0.4), ("two", 3.0, 0.4)])
+        let spans = Cuts.silences(in: t, duration: 4)
+        XCTAssertEqual(spans.count, 1)
+        XCTAssertEqual(spans[0].lowerBound, 0.58, accuracy: 0.001)
+        XCTAssertEqual(spans[0].upperBound, 2.82, accuracy: 0.001)
+    }
+
+    func testRemovingEveryFillerLeavesTheRest() {
+        let t = transcript([("so", 0, 0.4), ("um", 0.5, 0.3), ("hello", 1.0, 0.5)])
+        let out = Cuts.removeAll(Cuts.fillerSpans(in: t), from: [], duration: 2)
+        XCTAssertFalse(Cuts.isKept(0.65, in: out, duration: 2), "the um is gone")
+        XCTAssertTrue(Cuts.isKept(0.2, in: out, duration: 2))
+        XCTAssertTrue(Cuts.isKept(1.2, in: out, duration: 2))
+    }
+}

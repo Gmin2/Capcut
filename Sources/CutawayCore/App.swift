@@ -375,6 +375,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             p.seek(to: p.outputTime(forSource: sourceT))
         }
         inspector.onExport = { [weak self] in self?.exportVideo() }
+
+        // editing by reading: the transcript drives the cut list
+        transcript.onSeek = { [weak self] t in
+            guard let self, let p = self.preview else { return }
+            p.pause()
+            p.seek(to: p.outputTime(forSource: t))
+        }
+        transcript.onRemove = { [weak self] span in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                p.segments = Cuts.remove(span, from: p.segments, duration: duration)
+            }
+            Log.line(String(format: "cut %.1fs to %.1fs", span.lowerBound, span.upperBound))
+        }
+        transcript.onRestore = { [weak self] span in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                p.segments = Cuts.restore(span, into: p.segments, duration: duration)
+            }
+        }
+        transcript.onRemoveFillers = { [weak self] in
+            guard let self, let script = Transcript.load(from: self.recordingDir) else { return }
+            let spans = Cuts.fillerSpans(in: script)
+            guard !spans.isEmpty else {
+                Log.line("no filler words in this take")
+                return
+            }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                p.segments = Cuts.removeAll(spans, from: p.segments, duration: duration)
+            }
+            Log.line("removed \(spans.count) filler word(s)")
+        }
+        transcript.onTighten = { [weak self] in
+            guard let self, let script = Transcript.load(from: self.recordingDir) else { return }
+            let duration = self.timelineView.duration
+            let spans = Cuts.silences(in: script, duration: duration)
+            guard !spans.isEmpty else {
+                Log.line("no long pauses in this take")
+                return
+            }
+            self.editProject { p in
+                p.segments = Cuts.removeAll(spans, from: p.segments, duration: duration)
+            }
+            Log.line("trimmed \(spans.count) pause(s)")
+        }
     }
 
     private func setTime(_ t: Double, _ total: Double) {
@@ -758,7 +806,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timelineView.loadWaveform(from: recordingDir, manifest: m)
         timelineView.window?.invalidateCursorRects(for: timelineView)
         inspector.show(project, recording: recordingDir, duration: m.screen.duration)
-        transcript.show(Transcript.load(from: recordingDir))
+        transcript.show(Transcript.load(from: recordingDir), cut: project.segments,
+                        duration: m.screen.duration)
         preview?.load(recordingDir: recordingDir, outputSize: outputSize,
                       timeline: tl, screenSize: screenSize, webcamSize: webcamSize)
         Log.line(String(format: "%.0f×%.0f  60 fps", screenSize.width, screenSize.height))
@@ -1064,6 +1113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autotranscript") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.transcriptCheck() }
+        }
         else if consume("autouisnap") {
             // draws the window itself, so it works without screen recording
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
@@ -1271,6 +1323,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 self?.preview?.seek(to: 2.4)
             }
+        }
+    }
+
+    /// Drives editing by transcript: pick words, cut them, put them back.
+    private func transcriptCheck() {
+        func report(_ name: String, _ ok: Bool, _ detail: String) {
+            Log.line("transcript: \(ok ? "PASS" : "FAIL") \(name) \(detail)")
+        }
+        guard let dir = Paths.allRecordings().first(where: {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("transcript.json").path)
+        }) else {
+            report("a take with words", false, "none found")
+            return
+        }
+        open(dir)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            let duration = self.timelineView.duration
+            let original = Project.load(from: dir)
+            defer {
+                if let original { try? original.write(to: dir) }
+                self.history.clear()
+                self.refreshHistoryButtons()
+                self.reload()
+            }
+            report("words shown", self.transcript.wordCount > 2,
+                   "\(self.transcript.wordCount) words")
+
+            guard let span = self.transcript.selectWords(from: 0, to: 2) else {
+                report("select words", false, "nothing selectable")
+                return
+            }
+            self.transcript.removeSelected()
+            let after = Project.load(from: dir)?.segments ?? []
+            let kept = Cuts.kept(after, duration: duration)
+            report("removing words cuts the take", kept < duration - 0.1,
+                   String(format: "%.1fs of %.1fs kept", kept, duration))
+            report("the cut covers the words",
+                   !Cuts.isKept((span.lowerBound + span.upperBound) / 2, in: after, duration: duration),
+                   String(format: "span %.2f-%.2f", span.lowerBound, span.upperBound))
+
+            self.transcript.restoreSelected()
+            let back = Cuts.kept(Project.load(from: dir)?.segments ?? [], duration: duration)
+            report("bring back restores it", back > duration - 0.15,
+                   String(format: "%.1fs of %.1fs kept", back, duration))
+
+            self.undo()
+            self.undo()
+            let undone = Cuts.kept(Project.load(from: dir)?.segments ?? [], duration: duration)
+            report("undo walks back the cuts", abs(undone - duration) < 0.15,
+                   String(format: "%.1fs kept", undone))
+
+            // leave a cut in place for the screenshot, then restore
+            self.transcript.selectWords(from: 2, to: 5)
+            self.transcript.removeSelected()
+            if let v = self.window.contentView,
+               let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                v.cacheDisplay(in: v.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?
+                    .write(to: Paths.support.appendingPathComponent("ui.png"))
+            }
+            self.transcript.restoreSelected()
+
+            self.transcript.tightenPauses()
+            let tightened = Cuts.kept(Project.load(from: dir)?.segments ?? [], duration: duration)
+            report("pauses trimmed", tightened <= duration + 0.01,
+                   String(format: "%.1fs of %.1fs kept", tightened, duration))
         }
     }
 
