@@ -405,6 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             p.seek(to: p.outputTime(forSource: sourceT))
         }
         inspector.onExport = { [weak self] in self?.exportVideo() }
+        inspector.onExportPreset = { [weak self] name in self?.exportVideo(preset: name) }
 
         // editing by reading: the transcript drives the cut list
         transcript.onSeek = { [weak self] t in
@@ -1056,20 +1057,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func exportVideo() {
+    @objc private func exportVideo() { exportVideo(preset: nil) }
+
+    private func exportVideo(preset name: String?) {
         guard !exporting else {
             Log.line("already exporting")
             return
         }
         exporting = true
         inspector.setExporting(true)
-        statusLabel.stringValue = "exporting…"
-        let out = URL(fileURLWithPath: base + "/export.mp4")
+        let preset = name.flatMap { ExportPreset.named[$0] }
+        statusLabel.stringValue = "exporting \(preset?.name ?? "1080p")…"
+        let suffix = preset.map { "-\($0.name.lowercased())" } ?? ""
+        let out = URL(fileURLWithPath: base + "/export\(suffix)."
+                      + ((preset?.isGIF ?? false) ? "gif" : "mp4"))
         Task {
             do {
-                try await Export.run(recordingDir: recordingDir, to: out)
+                try await Export.run(recordingDir: recordingDir, preset: preset, to: out)
                 await MainActor.run {
-                    self.statusLabel.stringValue = "exported export.mp4"
+                    self.statusLabel.stringValue = "exported \(out.lastPathComponent)"
                     NSWorkspace.shared.activateFileViewerSelecting([out])
                 }
             } catch {

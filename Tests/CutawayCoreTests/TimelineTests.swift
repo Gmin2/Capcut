@@ -705,3 +705,49 @@ final class SpeedRampTests: XCTestCase {
         XCTAssertEqual(map.outputDuration, 4 + 1.5, accuracy: 0.01)
     }
 }
+
+final class SubtitleTests: XCTestCase {
+
+    private func transcript(_ words: [(String, Double)]) -> Transcript {
+        var t = Transcript()
+        t.segments = words.map {
+            Transcript.Segment(t: $0.1, duration: 0.4, text: $0.0, confidence: 1)
+        }
+        return t
+    }
+
+    func testLinesBreakAtTheWordLimit() {
+        let words = (0..<10).map { ("word\($0)", Double($0) * 0.5) }
+        let lines = Subtitles.lines(from: transcript(words),
+                                    timeMap: TimeMap(segments: [], sourceDuration: 10),
+                                    wordsPerLine: 4)
+        XCTAssertEqual(lines.count, 3, "10 words at 4 per line")
+        XCTAssertEqual(lines[0].start, 0, accuracy: 0.01)
+    }
+
+    /// Words that were cut out of the video must not appear in the file, and
+    /// the ones after a cut have to shift earlier by exactly what was removed.
+    func testCutWordsAreDroppedAndTheRestShift() {
+        let t = transcript([("one", 0), ("two", 1), ("three", 2), ("four", 3)])
+        let kept = Cuts.remove(0.9...2.0, from: [], duration: 4)
+        let lines = Subtitles.lines(from: t, timeMap: TimeMap(segments: kept, sourceDuration: 4),
+                                    wordsPerLine: 1)
+        let texts = lines.map(\.text)
+        XCTAssertFalse(texts.contains("two"))
+        XCTAssertTrue(texts.contains("three"))
+        let three = lines.first { $0.text == "three" }
+        XCTAssertEqual(three?.start ?? -1, 0.9, accuracy: 0.05, "shifted earlier by the cut")
+    }
+
+    func testTimestampsAreSubRip() {
+        XCTAssertEqual(Subtitles.stamp(0), "00:00:00,000")
+        XCTAssertEqual(Subtitles.stamp(3661.5), "01:01:01,500")
+    }
+
+    func testSrtIsNumberedFromOne() {
+        let srt = Subtitles.srt([.init(start: 0, end: 1, text: "hello"),
+                                 .init(start: 1, end: 2, text: "there")])
+        XCTAssertTrue(srt.hasPrefix("1\n00:00:00,000 --> 00:00:01,000\nhello"))
+        XCTAssertTrue(srt.contains("2\n00:00:01,000 --> 00:00:02,000\nthere"))
+    }
+}

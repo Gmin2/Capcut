@@ -66,6 +66,7 @@ public enum Export {
         let preset = preset ?? ExportPreset(
             name: "custom", size: outputSize, fps: fps,
             codec: .hevc, bitrate: 12_000_000)
+
         let outputSize = preset.size
         let fps = preset.fps
         // GIFs are produced by encoding a video first, then quantising it.
@@ -98,6 +99,14 @@ public enum Export {
             sourceSize: screen.size, events: Events.load(from: recordingDir),
             sourceDuration: duration,
             transcript: Transcript.load(from: recordingDir))
+
+        // a subtitle file beside the video, in edited time, because every
+        // upload form asks for one and nobody wants to retype the words
+        defer {
+            if !preset.isGIF {
+                Subtitles.write(recordingDir: recordingDir, timeMap: tl.timeMap, beside: url)
+            }
+        }
         if let override = preset.layoutOverride {
             tl.layouts = tl.layouts.merging(override) { _, new in new }
         }
