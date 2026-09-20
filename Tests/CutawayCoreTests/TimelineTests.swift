@@ -462,3 +462,49 @@ final class AutoCutSafetyTests: XCTestCase {
         XCTAssertTrue(p.segments.isEmpty, "no speech and no clicks means no cutting")
     }
 }
+
+final class CaptureGeometryTests: XCTestCase {
+
+    /// The screen is y-up with the origin bottom left; a capture region is
+    /// y-down from the top of its display. Getting this backwards captures the
+    /// mirror image of what was dragged.
+    @MainActor
+    func testSelectionConvertsToDisplayLocal() {
+        let screen = NSRect(x: 0, y: 0, width: 1512, height: 982)
+        let dragged = NSRect(x: 100, y: 800, width: 400, height: 100)
+        let local = SelectionOverlay.local(dragged, on: screen)
+        XCTAssertEqual(local.minX, 100, accuracy: 0.001)
+        XCTAssertEqual(local.minY, 82, accuracy: 0.001, "982 - (800 + 100)")
+        XCTAssertEqual(local.width, 400, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testSelectionOnASecondScreenIsRelativeToThatScreen() {
+        let screen = NSRect(x: 1512, y: 0, width: 1920, height: 1080)
+        let dragged = NSRect(x: 1612, y: 80, width: 200, height: 200)
+        let local = SelectionOverlay.local(dragged, on: screen)
+        XCTAssertEqual(local.minX, 100, accuracy: 0.001)
+        XCTAssertEqual(local.minY, 800, accuracy: 0.001)
+    }
+}
+
+final class FrameTests: XCTestCase {
+
+    func testPaddingGrowsTheExportOnBothSides() {
+        var f = Frame()
+        f.padding = 80
+        let image = CGSize(width: 1200, height: 800)
+        let content = CGSize(width: image.width + f.padding * 2, height: image.height + f.padding * 2)
+        XCTAssertEqual(content.width, 1360)
+        XCTAssertEqual(content.height, 960)
+    }
+
+    func testStepMarkIsRoundAroundItsPoint() {
+        let m = Mark(tool: .step, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 100, y: 100),
+                     color: .red, width: 4, text: "", number: 1)
+        let b = m.bounds(scale: 1)
+        XCTAssertEqual(b.midX, 100, accuracy: 0.001)
+        XCTAssertEqual(b.midY, 100, accuracy: 0.001)
+        XCTAssertEqual(b.width, b.height, accuracy: 0.001)
+    }
+}

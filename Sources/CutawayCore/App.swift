@@ -60,6 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hk = Hotkey()
         hk.register(.record) { [weak self] in self?.toggleRecord() }
         hk.register(.pause) { [weak self] in self?.togglePause() }
+        hk.register(.captureArea) { Capture.area() }
+        hk.register(.captureScreen) { Capture.fullScreen() }
         hotkey = hk
 
         sidebar.reload(selected: recordingDir)
@@ -432,6 +434,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appItem.submenu = appMenu
         main.addItem(appItem)
 
+        let captureItem = NSMenuItem()
+        let capture = NSMenu(title: "Capture")
+        let areaItem = NSMenuItem(title: "Capture Area", action: #selector(captureArea),
+                                  keyEquivalent: "6")
+        areaItem.keyEquivalentModifierMask = [.command, .shift]
+        let screenItem = NSMenuItem(title: "Capture Screen", action: #selector(captureScreen),
+                                    keyEquivalent: "7")
+        screenItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(areaItem)
+        capture.addItem(screenItem)
+        capture.addItem(.separator())
+        let markupItem = NSMenuItem(title: "Markup Last Capture", action: #selector(markupLast),
+                                    keyEquivalent: "e")
+        markupItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(markupItem)
+        capture.items.forEach { $0.target = self }
+        captureItem.submenu = capture
+        main.addItem(captureItem)
+
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Undo", action: #selector(undo), keyEquivalent: "z")
@@ -444,6 +465,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         main.addItem(editItem)
 
         NSApp.mainMenu = main
+    }
+
+    @objc private func captureArea() { Capture.area() }
+    @objc private func captureScreen() { Capture.fullScreen() }
+
+    @objc private func markupLast() {
+        guard let last = Capture.lastShot() else {
+            Log.line("no capture yet, press ⌘⇧6")
+            return
+        }
+        AnnotateWindow.show(url: last)
     }
 
     private func refreshHistoryButtons() {
@@ -772,6 +804,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autoannotate") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                let w = AnnotateWindow.show(image: AppDelegate.checkerboard(), url: nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    w.selfCheck(writingTo: Paths.support.appendingPathComponent("annotate-test.png"))
+                    Task {
+                        try? await Task.sleep(nanoseconds: 600_000_000)
+                        try? await Snapshot.captureWindow(
+                            bundleID: Bundle.main.bundleIdentifier ?? "com.mintu.cutaway",
+                            titled: "Capture",
+                            to: URL(fileURLWithPath: base + "/annotate.png"))
+                    }
+                }
+            }
+        }
+        else if consume("autoshot") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                Task { await Capture.shoot(display: CGMainDisplayID(),
+                                           region: CGRect(x: 120, y: 90, width: 640, height: 400)) }
+            }
+        }
         else if consume("autoprompter") {
             // the panel is excluded from screen capture, so draw it directly
             Prompter.shared.show()
@@ -884,6 +937,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         undo()
         let undone = project()?.trimStart ?? -1
         report("undo reverts trim", undone < 0.05, String(format: "trimStart %.2f", undone))
+    }
+
+    /// A picture to draw on that has no private content in it.
+    static func checkerboard(width: Int = 1200, height: Int = 800) -> CGImage {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor(white: 0.93, alpha: 1).setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        NSColor(white: 0.82, alpha: 1).setFill()
+        for row in 0..<(height / 80) {
+            for col in 0..<(width / 80) where (row + col) % 2 == 0 {
+                NSRect(x: col * 80, y: row * 80, width: 80, height: 80).fill()
+            }
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.cgImage!
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }

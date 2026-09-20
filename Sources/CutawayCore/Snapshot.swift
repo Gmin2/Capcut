@@ -6,12 +6,13 @@ import AppKit
 /// looking at the app's own window during development.
 public enum Snapshot {
     /// Captures one app's frontmost window even when another window covers it.
-    public static func captureWindow(bundleID: String, to url: URL) async throws {
+    public static func captureWindow(bundleID: String, titled: String? = nil, to url: URL) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let window = content.windows
             // this process only, another copy of the app may have a window open too
             .filter({ $0.owningApplication?.bundleIdentifier == bundleID
-                      && $0.owningApplication?.processID == getpid() && $0.frame.width > 400 })
+                      && $0.owningApplication?.processID == getpid() && $0.frame.width > 400
+                      && (titled == nil || $0.title == titled) })
             .max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
             throw NSError(domain: "cutaway", code: 41,
                           userInfo: [NSLocalizedDescriptionKey: "no window for \(bundleID)"])
