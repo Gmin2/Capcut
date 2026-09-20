@@ -678,3 +678,30 @@ final class CutsTests: XCTestCase {
         XCTAssertTrue(Cuts.isKept(1.2, in: out, duration: 2))
     }
 }
+
+final class SpeedRampTests: XCTestCase {
+
+    func testSplittingMakesTwoSpansThatStillCoverTheTake() {
+        let out = Cuts.split(at: 4, in: [], duration: 10)
+        XCTAssertEqual(out.count, 2)
+        XCTAssertEqual(out[0].sourceEnd, 4, accuracy: 0.001)
+        XCTAssertEqual(out[1].sourceStart, 4, accuracy: 0.001)
+        XCTAssertEqual(Cuts.kept(out, duration: 10), 10, accuracy: 0.001)
+    }
+
+    func testSplittingAtTheVeryEdgeDoesNothing() {
+        XCTAssertEqual(Cuts.split(at: 0.05, in: [], duration: 10).count, 1)
+    }
+
+    /// The point of a ramp: one span runs fast, the rest stays real time.
+    func testOneSpanCanRunFast() {
+        let split = Cuts.split(at: 4, in: [], duration: 10)
+        let ramped = Cuts.setSpeed(4, at: 1, in: split, duration: 10)
+        var p = Project()
+        p.segments = ramped
+        let map = p.timeline(sourceSize: CGSize(width: 1920, height: 1080),
+                             events: Events(), sourceDuration: 10, transcript: nil).timeMap
+        // 4s at 1x plus 6s at 4x
+        XCTAssertEqual(map.outputDuration, 4 + 1.5, accuracy: 0.01)
+    }
+}

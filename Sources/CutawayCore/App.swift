@@ -258,6 +258,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         timelineView.onKey = { [weak self] event in self?.handleEditorKey(event) ?? false }
 
+        timelineView.onSpanSpeed = { [weak self] index, speed in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                p.segments = Cuts.setSpeed(speed, at: index, in: p.segments, duration: duration)
+            }
+            Log.line("span \(index) now runs at \(speed.clean)×")
+        }
+        timelineView.onSplitSpan = { [weak self] t in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                p.segments = Cuts.split(at: t, in: p.segments, duration: duration)
+            }
+        }
+        timelineView.onRemoveSpan = { [weak self] index in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                let all = Cuts.base(p.segments, duration: duration)
+                guard all.indices.contains(index) else { return }
+                p.segments = Cuts.remove(all[index].sourceStart...all[index].sourceEnd,
+                                         from: all, duration: duration)
+            }
+        }
+
         timelineView.onSeek = { [weak self] sourceT in
             guard let self, let p = self.preview else { return }
             p.pause()
@@ -1468,6 +1494,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         drag(0.0, at(0.15), .wave)
         let trim = project()?.trimStart ?? -1
         report("trim start drag", abs(trim - at(0.15)) < near, String(format: "trimStart %.2f", trim))
+
+        // the speed lane: split a piece, run it fast, then throw it away
+        let splitAt = at(0.5)
+        click(splitAt, .speed, clicks: 2)
+        let spans = project()?.segments.count ?? 0
+        report("split makes two pieces", spans >= 2, "spans \(spans)")
+
+        tl.testSpanSpeed(index: 1, speed: 4)
+        let fast = project()?.segments.last?.speed ?? 0
+        report("a piece can run fast", abs(fast - 4) < 0.01, "speed \(fast.clean)×")
+
+        // leave the ramp in place for a render, then carry on
+        if let v = self.window.contentView,
+           let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+            v.cacheDisplay(in: v.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?
+                .write(to: Paths.support.appendingPathComponent("ui.png"))
+        }
+
+        tl.testRemoveSpan(index: 1)
+        let leftSpans = project()?.segments.count ?? -1
+        report("a piece can be removed", leftSpans == 1, "spans \(leftSpans)")
+
+        undo()
+        undo()
+        undo()
+
+        drag(0.0, at(0.15), .wave)
+        let trim2 = project()?.trimStart ?? -1
+        report("trim after span edits", abs(trim2 - at(0.15)) < near,
+               String(format: "trimStart %.2f", trim2))
 
         undo()
         let undone = project()?.trimStart ?? -1

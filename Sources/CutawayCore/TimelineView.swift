@@ -18,6 +18,10 @@ public final class TimelineView: ThemedView {
     public var onAddZoom: ((Double) -> Void)?
     public var onDeleteZoom: ((Int) -> Void)?
     public var onNudgeZoomLevel: ((Double) -> Void)?
+    /// The speed lane: set how fast one span runs, or split it in two.
+    public var onSpanSpeed: ((Int, Double) -> Void)?
+    public var onSplitSpan: ((Double) -> Void)?
+    public var onRemoveSpan: ((Int) -> Void)?
     /// Bracket a drag, so it can be undone as one edit.
     public var onGestureBegan: (() -> Void)?
     public var onGestureEnded: (() -> Void)?
@@ -38,7 +42,8 @@ public final class TimelineView: ThemedView {
     private let laneHeight: CGFloat = 22
     private var sceneY: CGFloat { waveTop + waveHeight + 10 }
     private var zoomY: CGFloat { sceneY + laneHeight + 6 }
-    public static let preferredHeight: CGFloat = 32 + 62 + 10 + 22 + 6 + 22 + 10
+    private var speedY: CGFloat { zoomY + laneHeight + 6 }
+    public static let preferredHeight: CGFloat = 32 + 62 + 10 + 22 + 6 + 22 + 6 + 22 + 10
 
     public override var acceptsFirstResponder: Bool { true }
 
@@ -184,10 +189,34 @@ public final class TimelineView: ThemedView {
         }
     }
 
+    /// The cut list: what survives, and how fast each piece runs.
+    private func drawSpans(_ tl: Timeline) {
+        for (i, s) in tl.timeMap.segments.enumerated() {
+            let r = NSRect(x: trackX(s.sourceStart), y: speedY,
+                           width: max(2, trackX(s.sourceEnd) - trackX(s.sourceStart)),
+                           height: laneHeight).insetBy(dx: 1, dy: 0)
+            let fast = s.speed > 1.01
+            let live = playhead >= s.sourceStart && playhead <= s.sourceEnd
+            let fill = fast ? Theme.accent.withAlphaComponent(live ? 0.32 : 0.2)
+                            : (live ? Theme.fillSelected : Theme.fill)
+            fill.setFill()
+            NSBezierPath(roundedRect: r, xRadius: Theme.radiusControl,
+                         yRadius: Theme.radiusControl).fill()
+            if r.width > 34 {
+                text(s.speed == 1 ? "1×" : "\(s.speed.clean)×",
+                     at: NSPoint(x: r.minX + 7, y: r.minY + 3), .caption,
+                     fast ? Theme.textPrimary : Theme.textSecondary)
+            }
+            _ = i
+        }
+    }
+
     private func drawLanes() {
         text("Scenes", at: NSPoint(x: 0, y: sceneY + 3), .caption, Theme.textTertiary)
         text("Zoom", at: NSPoint(x: 0, y: zoomY + 3), .caption, Theme.textTertiary)
+        text("Speed", at: NSPoint(x: 0, y: speedY + 3), .caption, Theme.textTertiary)
         guard let tl = timeline else { return }
+        drawSpans(tl)
 
         let scenes = tl.scenes.sorted { $0.at < $1.at }
         for (i, sc) in scenes.enumerated() {
@@ -278,7 +307,7 @@ public final class TimelineView: ThemedView {
 
     // MARK: interaction
 
-    enum Lane { case ruler, wave, scene, zoom }
+    enum Lane { case ruler, wave, scene, zoom, speed }
 
     /// Where a moment sits on a lane, in this view's coordinates.
     func point(at t: Double, lane: Lane) -> NSPoint {
@@ -288,6 +317,7 @@ public final class TimelineView: ThemedView {
         case .wave: y = waveTop + waveHeight / 2
         case .scene: y = sceneY + laneHeight / 2
         case .zoom: y = zoomY + laneHeight / 2
+        case .speed: y = speedY + laneHeight / 2
         }
         return NSPoint(x: trackX(t), y: y)
     }
@@ -317,6 +347,15 @@ public final class TimelineView: ThemedView {
             if hit.edge == 0, let z = timeline?.zooms[hit.index] {
                 zoomGrabOffset = time(at: p) - z.start
             }
+            return
+        }
+        if isInSpeedLane(p) {
+            if event.clickCount == 2 { onSplitSpan?(time(at: p)); return }
+            if event.modifierFlags.contains(.option), let i = spanIndex(at: p) {
+                onRemoveSpan?(i)
+                return
+            }
+            onSeek?(time(at: p))
             return
         }
         if event.clickCount == 2, isInZoomLane(p) { onAddZoom?(time(at: p)); return }
@@ -376,6 +415,61 @@ public final class TimelineView: ThemedView {
     }
 
     private func isInZoomLane(_ p: NSPoint) -> Bool { p.y >= zoomY && p.y <= zoomY + laneHeight }
+    private func isInSpeedLane(_ p: NSPoint) -> Bool { p.y >= speedY && p.y <= speedY + laneHeight }
+
+    private func spanIndex(at p: NSPoint) -> Int? {
+        guard let tl = timeline else { return nil }
+        let t = time(at: p)
+        return tl.timeMap.segments.firstIndex { t >= $0.sourceStart && t <= $0.sourceEnd }
+    }
+
+    /// Right-click a span to set its speed, which is where people look for it.
+    public override func rightMouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        guard isInSpeedLane(p), let i = spanIndex(at: p) else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        speedMenuIndex = i
+        let menu = NSMenu()
+        for speed in [1.0, 1.5, 2.0, 4.0, 8.0] {
+            let item = NSMenuItem(title: "\(speed.clean)×", action: #selector(pickSpanSpeed(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = speed
+            item.state = abs((timeline?.timeMap.segments[i].speed ?? 1) - speed) < 0.01 ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let split = NSMenuItem(title: "Split here", action: #selector(splitSpan), keyEquivalent: "")
+        split.target = self
+        menu.addItem(split)
+        let cut = NSMenuItem(title: "Remove this piece", action: #selector(removeSpan),
+                             keyEquivalent: "")
+        cut.target = self
+        menu.addItem(cut)
+        splitAt = time(at: p)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    /// Hooks for the scripted check: the menu itself cannot be driven.
+    func testSpanSpeed(index: Int, speed: Double) { onSpanSpeed?(index, speed) }
+    func testRemoveSpan(index: Int) { onRemoveSpan?(index) }
+
+    private var speedMenuIndex: Int?
+    private var splitAt: Double = 0
+
+    @objc private func pickSpanSpeed(_ item: NSMenuItem) {
+        guard let i = speedMenuIndex, let speed = item.representedObject as? Double else { return }
+        onSpanSpeed?(i, speed)
+    }
+
+    @objc private func splitSpan() { onSplitSpan?(splitAt) }
+
+    @objc private func removeSpan() {
+        guard let i = speedMenuIndex else { return }
+        onRemoveSpan?(i)
+    }
     private func isInSceneLane(_ p: NSPoint) -> Bool { p.y >= sceneY && p.y <= sceneY + laneHeight }
 
     private func zoomHit(_ p: NSPoint) -> (index: Int, edge: Int)? {

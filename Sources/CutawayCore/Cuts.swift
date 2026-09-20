@@ -120,6 +120,33 @@ public enum Cuts {
         return out
     }
 
+    /// Splits the span holding `t`, so half of it can run at another speed.
+    public static func split(at t: Double, in segments: [Segment], duration: Double) -> [Segment] {
+        var out: [Segment] = []
+        for s in base(segments, duration: duration) {
+            guard t > s.sourceStart + 0.15, t < s.sourceEnd - 0.15 else {
+                out.append(s)
+                continue
+            }
+            var head = s, tail = s
+            head.sourceEnd = t
+            tail.sourceStart = t
+            out.append(head)
+            out.append(tail)
+        }
+        return out
+    }
+
+    /// Sets the speed of one span. 4 is the usual "skip through the boring
+    /// part without cutting it out" number.
+    public static func setSpeed(_ speed: Double, at index: Int, in segments: [Segment],
+                                duration: Double) -> [Segment] {
+        var out = base(segments, duration: duration)
+        guard out.indices.contains(index) else { return out }
+        out[index].speed = max(0.25, speed)
+        return out
+    }
+
     /// How much of the take survives, for telling someone what a cut did.
     public static func kept(_ segments: [Segment], duration: Double) -> Double {
         base(segments, duration: duration).reduce(0) { $0 + ($1.sourceEnd - $1.sourceStart) }
