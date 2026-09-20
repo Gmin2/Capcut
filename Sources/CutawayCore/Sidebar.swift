@@ -237,12 +237,24 @@ final class TakeCard: Control {
 }
 
 /// What was said, with the part already spoken brought forward.
-public final class TranscriptPanel: ThemedView {
+public final class TranscriptPanel: ThemedView, NSTextViewDelegate {
 
     private let text = NSTextView()
-    private var words: [(t: Double, text: String, range: NSRange)] = []
+    private var words: [(t: Double, end: Double, text: String, range: NSRange)] = []
     private var lastSpoken = -2
     private var empty = true
+    private var cut: [Segment] = []
+    private var duration: Double = 0
+
+    /// Editing by reading: pick words, and the video loses them.
+    public var onRemove: ((ClosedRange<Double>) -> Void)?
+    public var onRestore: ((ClosedRange<Double>) -> Void)?
+    public var onRemoveFillers: (() -> Void)?
+    public var onTighten: (() -> Void)?
+    public var onSeek: ((Double) -> Void)?
+    private let removeButton = FillButton("Remove")
+    private let restoreButton = FillButton("Bring back")
+    private let hint = Theme.label("", .meta, color: Theme.textTertiary)
 
     public override init(frame: NSRect) {
         super.init(frame: frame)
@@ -260,7 +272,22 @@ public final class TranscriptPanel: ThemedView {
         text.autoresizingMask = [.width]
         scroll.documentView = text
 
-        for v in [header, scroll] as [NSView] {
+        removeButton.toolTip = "Cut the selected words out of the video"
+        removeButton.onClick = { [weak self] in self?.removeSelection() }
+        restoreButton.toolTip = "Put the selected words back"
+        restoreButton.onClick = { [weak self] in self?.restoreSelection() }
+        let fillers = FillButton("Fillers") { [weak self] in self?.onRemoveFillers?() }
+        fillers.toolTip = "Remove um, uh and the rest"
+        let tighten = FillButton("Pauses") { [weak self] in self?.onTighten?() }
+        tighten.toolTip = "Trim the long silences"
+        let buttons = NSStackView(views: [removeButton, restoreButton, fillers, tighten])
+        buttons.spacing = 6
+        for b in [removeButton, restoreButton, fillers, tighten] {
+            b.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        }
+        text.delegate = self
+
+        for v in [header, buttons, hint, scroll] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -268,6 +295,10 @@ public final class TranscriptPanel: ThemedView {
             header.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            buttons.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            buttons.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            hint.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            hint.trailingAnchor.constraint(equalTo: buttons.leadingAnchor, constant: -10),
             scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -277,7 +308,11 @@ public final class TranscriptPanel: ThemedView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    public func show(_ transcript: Transcript?) {
+    /// The cut list decides which words show as struck through.
+    public func show(_ transcript: Transcript?, cut: [Segment] = [], duration: Double = 0) {
+        let previousSelection = text.selectedRange()
+        self.cut = cut
+        self.duration = duration
         words = []
         lastSpoken = -2
         let body = NSMutableAttributedString()
@@ -293,18 +328,95 @@ public final class TranscriptPanel: ThemedView {
         for seg in transcript.segments {
             let piece = (body.length == 0 ? "" : " ") + seg.text
             let start = body.length + (body.length == 0 ? 0 : 1)
-            body.append(NSAttributedString(string: piece, attributes: style(spoken: false)))
-            words.append((seg.t, seg.text, NSRange(location: start, length: seg.text.utf16.count)))
+            let gone = duration > 0 && !Cuts.isKept(seg.t + seg.duration / 2, in: cut, duration: duration)
+            body.append(NSAttributedString(string: piece, attributes: style(spoken: false, cut: gone)))
+            words.append((seg.t, seg.t + seg.duration, seg.text,
+                          NSRange(location: start, length: seg.text.utf16.count)))
         }
         text.textStorage?.setAttributedString(body)
+        // a cut reloads this panel; keeping the selection means Bring back is
+        // still there for the words you just removed
+        if previousSelection.length > 0,
+           NSMaxRange(previousSelection) <= (text.textStorage?.length ?? 0) {
+            text.setSelectedRange(previousSelection)
+        }
+        updateButtons()
     }
 
-    private func style(spoken: Bool) -> [NSAttributedString.Key: Any] {
+    /// The source span the selected words cover.
+    private var selectedSpan: ClosedRange<Double>? {
+        let range = text.selectedRange()
+        guard range.length > 0 else { return nil }
+        let picked = words.filter { NSIntersectionRange($0.range, range).length > 0 }
+        guard let first = picked.first, let last = picked.last else { return nil }
+        // a little air either side, so a cut never clips the next word
+        return max(0, first.t - 0.05)...(last.end + 0.05)
+    }
+
+    private func removeSelection() {
+        guard let span = selectedSpan else { return }
+        onRemove?(span)
+    }
+
+    private func restoreSelection() {
+        guard let span = selectedSpan else { return }
+        onRestore?(span)
+    }
+
+    /// Selects a run of words and hands back the span they cover, so the
+    /// editing path can be driven without a pointer.
+    @discardableResult
+    public func selectWords(from: Int, to: Int) -> ClosedRange<Double>? {
+        guard from >= 0, to <= words.count, from < to else { return nil }
+        let start = words[from].range.location
+        let end = NSMaxRange(words[to - 1].range)
+        text.setSelectedRange(NSRange(location: start, length: end - start))
+        updateButtons()
+        return selectedSpan
+    }
+
+    public func removeSelected() { removeSelection() }
+    public func restoreSelected() { restoreSelection() }
+    public func removeFillers() { onRemoveFillers?() }
+    public func tightenPauses() { onTighten?() }
+    public var wordCount: Int { words.count }
+
+    func selectionChanged() {
+        updateButtons()
+        // clicking a word is also how you get to that moment
+        let range = text.selectedRange()
+        if range.length <= 1, let word = words.last(where: { $0.range.location <= range.location }) {
+            onSeek?(word.t)
+        }
+    }
+
+    private func updateButtons() {
+        let span = selectedSpan
+        removeButton.isEnabled = span != nil
+        restoreButton.isEnabled = span != nil
+        guard duration > 0 else {
+            hint.stringValue = ""
+            return
+        }
+        let kept = Cuts.kept(cut, duration: duration)
+        hint.stringValue = kept < duration - 0.05
+            ? String(format: "%.0fs of %.0fs kept", kept, duration)
+            : "select words, then Remove"
+    }
+
+    private func style(spoken: Bool, cut: Bool = false) -> [NSAttributedString.Key: Any] {
         let para = NSMutableParagraphStyle()
         para.lineSpacing = 4
-        return [.font: Theme.Text.body.font,
-                .foregroundColor: spoken ? Theme.textPrimary : Theme.textSecondary,
-                .paragraphStyle: para]
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: Theme.Text.body.font,
+            .foregroundColor: spoken ? Theme.textPrimary : Theme.textSecondary,
+            .paragraphStyle: para,
+        ]
+        if cut {
+            attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            attrs[.foregroundColor] = Theme.textTertiary
+        }
+        return attrs
     }
 
     /// Only restyles when the spoken word changes, not on every frame.
@@ -314,11 +426,9 @@ public final class TranscriptPanel: ThemedView {
         guard spoken != lastSpoken else { return }
         lastSpoken = spoken
         storage.beginEditing()
-        let full = NSRange(location: 0, length: storage.length)
-        storage.addAttributes(style(spoken: false), range: full)
-        if spoken >= 0 {
-            let end = NSMaxRange(words[spoken].range)
-            storage.addAttributes(style(spoken: true), range: NSRange(location: 0, length: end))
+        for (i, word) in words.enumerated() {
+            let gone = duration > 0 && !Cuts.isKept((word.t + word.end) / 2, in: cut, duration: duration)
+            storage.addAttributes(style(spoken: i <= spoken, cut: gone), range: word.range)
         }
         storage.endEditing()
     }
@@ -328,5 +438,13 @@ public final class TranscriptPanel: ThemedView {
         let t = lastSpoken
         lastSpoken = -2
         if t >= 0 { update(time: words[t].t) }
+    }
+}
+
+
+extension TranscriptPanel {
+    /// Selecting words is the whole interaction, so the buttons follow it.
+    public func textViewDidChangeSelection(_ notification: Notification) {
+        selectionChanged()
     }
 }
