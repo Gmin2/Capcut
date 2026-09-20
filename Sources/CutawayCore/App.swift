@@ -70,7 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotkey = hk
 
-        MainActor.assumeIsolated { installMenuBarItem() }
+        MainActor.assumeIsolated {
+            installMenuBarItem()
+            // first run: ask for what the app cannot work without
+            if Welcome.needed { Welcome.show() }
+        }
         sidebar.reload(selected: recordingDir)
         reload()
         handleTriggers()
@@ -530,6 +534,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Cutaway", action: #selector(about), keyEquivalent: "")
+        let welcomeItem = NSMenuItem(title: "Welcome and Permissions…", action: #selector(showWelcome),
+                                     keyEquivalent: "")
+        appMenu.addItem(welcomeItem)
         appMenu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings),
                                   keyEquivalent: ",")
@@ -679,6 +686,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 attributes: [.font: Theme.Text.body.font, .foregroundColor: Theme.textSecondary]),
         ])
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func showWelcome() {
+        Task { @MainActor in Welcome.show() }
     }
 
     @objc private func showSettings() {
@@ -1139,6 +1150,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autowelcome") {
+            Task { @MainActor in
+                UserDefaults.standard.set(false, forKey: "welcome.done")
+                Log.line("welcome: \(Welcome.needed ? "PASS" : "FAIL") shown on a first run")
+                Welcome.show()
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                Log.line("welcome: \(Welcome.isOpen ? "PASS" : "FAIL") window open")
+                if let v = NSApp.windows.first(where: { $0.title == "Welcome" })?.contentView,
+                   let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                    v.cacheDisplay(in: v.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?
+                        .write(to: Paths.support.appendingPathComponent("welcome.png"))
+                }
+                UserDefaults.standard.set(true, forKey: "welcome.done")
+                Log.line("welcome: \(Welcome.needed ? "FAIL" : "PASS") not shown again")
+            }
+        }
         else if consume("autotranscript") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.transcriptCheck() }
         }
