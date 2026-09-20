@@ -7,6 +7,8 @@ import AVFoundation
 public final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 
     private let session = AVCaptureSession()
+    /// For showing the camera live while it records, without opening it twice.
+    public var captureSession: AVCaptureSession { session }
     private let clock: RecordClock
 
     public init(clock: RecordClock) {

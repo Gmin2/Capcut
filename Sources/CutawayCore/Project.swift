@@ -151,9 +151,14 @@ public struct Project: Codable {
         let ev = Events.load(from: recordingDir)
         p.zooms = AutoZoom.generate(clicks: ev.clicks, sourceSize: screenSize,
                                     duration: manifest.screen.duration)
-        p.segments = AutoCut.segments(events: ev,
-                                      transcript: Transcript.load(from: recordingDir),
-                                      duration: manifest.screen.duration)
+        // Cutting quiet time needs something to judge quiet by. With no speech
+        // and no clicks, a talking-head take looks idle from end to end and
+        // gets cut down to nothing, so leave it whole instead.
+        let transcript = Transcript.load(from: recordingDir)
+        p.segments = transcript != nil || !ev.clicks.isEmpty
+            ? AutoCut.segments(events: ev, transcript: transcript,
+                               duration: manifest.screen.duration)
+            : []
         p.scenes = manifest.webcam != nil
             ? [Scene(at: 0, layout: "talkingHead"),
                Scene(at: manifest.screen.duration * 0.35, layout: "demo", transition: 0.8)]

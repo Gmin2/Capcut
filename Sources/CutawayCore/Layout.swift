@@ -104,6 +104,15 @@ public struct Scene: Codable {
         self.layout = layout
         self.transition = transition
     }
+
+    // transition is optional in the file: without this, one scene written
+    // without it fails to decode and every scene is silently dropped
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        at = try c.decode(Double.self, forKey: .at)
+        layout = try c.decode(String.self, forKey: .layout)
+        transition = try c.decodeIfPresent(Double.self, forKey: .transition) ?? 0.6
+    }
 }
 
 extension Placement {

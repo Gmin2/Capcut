@@ -511,8 +511,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Hide first, then count down, so the window is out of shot before the
         // first frame rather than being cut out afterwards.
-        setup.deactivate()
-        window.orderOut(nil)
+        // camera only has no screen in the shot, so the window stays up and
+        // you can watch yourself; every other mode gets out of the way
+        if RecordSettings.load().capture == .camera, !setup.isHidden {
+            setup.pausePreview()
+        } else {
+            setup.deactivate()
+            window.orderOut(nil)
+        }
         countdown.run(from: countdownSeconds) { [weak self] in
             self?.beginRecording()
         }
@@ -564,7 +570,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .display: break
         case .window: r.onlyApp = settings.app
         case .area: r.area = settings.areaPoints(of: settings.displayID ?? CGMainDisplayID())
+        case .camera:
+            // the pipeline still wants a screen track, so keep it tiny; the
+            // edit only ever shows the camera
+            r.captureWebcam = true
+            r.captureSystemAudio = false
+            r.captureKeys = false
+            r.area = CGRect(x: 0, y: 0, width: 320, height: 180)
         }
+        cameraOnly = settings.capture == .camera
         systemLevel = settings.desktopAudio
         r.onStateChange = { [weak self] in
             DispatchQueue.main.async { self?.refreshRecordUI() }
@@ -573,8 +587,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             do {
+                if self.cameraOnly { await MainActor.run { self.setup.releaseCamera() } }
                 try await r.start(to: target.appendingPathComponent("display.mov"))
-                await MainActor.run { self.startTick() }
+                await MainActor.run {
+                    if self.cameraOnly, let session = r.webcamSession { self.setup.showLive(session) }
+                    Prompter.shared.recordingStarted()
+                    self.startTick()
+                }
             } catch {
                 Log.line("ERROR: \(error)")
                 await MainActor.run { self.recorder = nil; self.refreshRecordUI() }
@@ -590,6 +609,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         Task {
             do {
+                await MainActor.run {
+                    self.setup.releaseCamera()
+                    Prompter.shared.recordingStopped()
+                }
                 _ = try await r.stop()
                 await MainActor.run {
                     self.recorder = nil
@@ -600,8 +623,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.sidebar.reload(selected: take)
                         self.open(take)
                         // start the system track where the setup slider was
-                        if var p = Project.load(from: take), p.audio.system != self.systemLevel {
+                        if var p = Project.load(from: take) {
                             p.audio.system = self.systemLevel
+                            if self.cameraOnly {
+                                p.scenes = [Scene(at: 0, layout: "talkingHead")]
+                                p.zooms = []
+                                p.callouts = []
+                                p.deviceFrame = .none
+                            }
                             try? p.write(to: take)
                         }
                     }
@@ -628,12 +657,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var pendingTake: URL?
     private var systemLevel = 0.55
+    private var cameraOnly = false
 
     private func refreshRecordUI() {
         let r = recorder
         let live = r?.isRecording ?? false
         sidebar.newButton.title = live ? "Stop Recording" : "New Recording"
-        setup.setRecording(live)
+        setup.setRecording(live, elapsed: r?.elapsed ?? 0, paused: r?.isPaused ?? false)
         if live, let r {
             statusLabel.stringValue = String(format: "%@ %.1fs", r.isPaused ? "paused" : "recording",
                                              r.elapsed)
@@ -742,6 +772,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autoprompter") {
+            // the panel is excluded from screen capture, so draw it directly
+            Prompter.shared.show()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                Prompter.shared.snapshot(to: URL(fileURLWithPath: base + "/prompter.png"))
+                // then roll it as a take would, to check it scrolls
+                Prompter.shared.recordingStarted()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+                    Prompter.shared.recordingStopped()
+                    Prompter.shared.snapshot(to: URL(fileURLWithPath: base + "/prompter-scrolled.png"))
+                }
+            }
+        }
         else if consume("autosetup") {
             showSetup()
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {

@@ -31,6 +31,7 @@ public enum CLI {
             case "transcribe": return try await transcribe(args)
             case "pack":     return try pack(args)
             case "trim":     return try trim(args)
+            case "recut":    return try recut(args)
             case "import":   return try await importVideo(args)
             case "windows":  return try await windows()
             case "displays": return try await displays()
@@ -58,12 +59,14 @@ public enum CLI {
         }
     }
 
-    /// Commands that touch the screen, camera or microphone. Everything else
-    /// is pure file work and runs fine in-process.
+    /// Commands that touch the screen, camera or microphone, or that write
+    /// into the recordings folder. The folder needs the app's own permission:
+    /// run straight from a terminal, the same write is refused.
     static let childMarker = "--cutaway-child"
 
     static func needsAppLaunch(_ args: [String]) -> Bool {
-        ["record", "snap", "doctor", "windows", "displays", "transcribe"]
+        ["record", "snap", "doctor", "windows", "displays", "transcribe",
+         "export", "still", "pitch", "trim", "recut", "pack"]
             .contains(args.first ?? "")
     }
 
@@ -180,6 +183,10 @@ public enum CLI {
               Use `cutaway windows` to find bundle ids and `cutaway displays`
               to find display ids.
 
+          recut [--in DIR] [--none]
+              Rebuilds the cut list of a take already recorded. --none keeps
+              the whole take. Use it if an export came out far too short.
+
           export [--in DIR] [--out FILE] [--preset NAME] [--all]
                  [--width N] [--height N] [--fps N] [--codec hevc|h264]
               Renders the edit described by project.json. A custom size with
@@ -283,6 +290,34 @@ public enum CLI {
             Paths.linkLatest(to: dir)
         }
         emit(dir.path)
+        return 0
+    }
+
+    /// Rebuilds the cut list of a take that was already recorded, for one cut
+    /// badly by an older version.
+    static func recut(_ args: [String]) throws -> Int32 {
+        let opts = Options(args)
+        let dir = opts.url("--in") ?? defaultDir
+        guard var p = Project.load(from: dir),
+              let m = Manifest.load(from: dir.appendingPathComponent("recording.json")) else {
+            Log.line("no take at \(dir.path)")
+            return 1
+        }
+        let before = p.segments.count
+        if opts.flag("--none") {
+            p.segments = []
+        } else {
+            let ev = Events.load(from: dir)
+            let transcript = Transcript.load(from: dir)
+            p.segments = transcript != nil || !ev.clicks.isEmpty
+                ? AutoCut.segments(events: ev, transcript: transcript, duration: m.screen.duration)
+                : []
+        }
+        try p.write(to: dir)
+        let kept = p.segments.reduce(0.0) { $0 + ($1.sourceEnd - $1.sourceStart) }
+        emit("recut: \(before) -> \(p.segments.count) segments, "
+             + String(format: "%.1fs of %.1fs kept", p.segments.isEmpty ? m.screen.duration : kept,
+                      m.screen.duration))
         return 0
     }
 

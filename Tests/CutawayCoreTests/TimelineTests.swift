@@ -432,3 +432,33 @@ final class HistoryGroupTests: XCTestCase {
         XCTAssertEqual(h.depth.undo, 2)
     }
 }
+
+final class SceneDecodingTests: XCTestCase {
+
+    func testSceneWithoutTransitionStillDecodes() throws {
+        let json = #"{"scenes": [{"at": 0, "layout": "talkingHead"}]}"#
+        let p = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
+        XCTAssertEqual(p.scenes.count, 1)
+        XCTAssertEqual(p.scenes.first?.layout, "talkingHead")
+        XCTAssertEqual(p.scenes.first?.transition ?? 0, 0.6, accuracy: 0.001)
+    }
+}
+
+final class AutoCutSafetyTests: XCTestCase {
+
+    /// A talking-head take has no clicks and, without a mic, no transcript.
+    /// Cutting "idle" time there removes the whole recording.
+    func testSilentTakeWithNoClicksIsLeftWhole() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cutaway-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let manifest = Manifest(screen: .init(file: "display.mov", pixelSize: [1920, 1080],
+                                              offset: 0, duration: 160, frames: 9600),
+                                webcam: .init(file: "webcam.mov", pixelSize: [1920, 1080],
+                                              offset: 0, duration: 160, frames: 4800))
+        let p = Project.makeDefault(recordingDir: dir, manifest: manifest)
+        XCTAssertTrue(p.segments.isEmpty, "no speech and no clicks means no cutting")
+    }
+}

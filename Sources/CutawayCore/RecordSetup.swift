@@ -6,7 +6,7 @@ import ScreenCaptureKit
 /// opens the way it was left, and so the hotkey records the same thing.
 public struct RecordSettings {
     public enum Capture: String, CaseIterable {
-        case display = "Display", window = "Window", area = "Area"
+        case display = "Display", window = "Window", area = "Area", camera = "Camera only"
     }
 
     public var capture = Capture.display
@@ -63,18 +63,19 @@ public struct RecordSettings {
     }
 }
 
-/// Something that can be recorded: a whole display, or one app's windows.
+/// Something that can be recorded: a whole display, one app's windows, or a camera.
 struct Source {
     enum Kind: Equatable {
         case display(CGDirectDisplayID)
         case app(String)
+        case camera(String)
     }
 
     let kind: Kind
     let name: String
     let detail: String
     let size: CGSize
-    let filter: SCContentFilter
+    let filter: SCContentFilter?
     let icon: NSImage?
 
     // system surfaces that show up as windows but are not worth recording alone
@@ -86,7 +87,8 @@ struct Source {
     static func all() async throws -> [Source] {
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
         let me = Bundle.main.bundleIdentifier ?? "com.mintu.cutaway"
-        let mine = content.applications.filter { $0.bundleIdentifier == me }
+        // matched by process, not bundle id: the app list does not always carry ours
+        let mine = content.windows.filter { $0.owningApplication?.processID == getpid() }
         var out: [Source] = []
 
         for (i, d) in content.displays.enumerated() {
@@ -97,8 +99,7 @@ struct Source {
                               name: screen?.localizedName ?? "Display \(i + 1)",
                               detail: "\(d.width) × \(d.height)",
                               size: CGSize(width: d.width, height: d.height),
-                              filter: SCContentFilter(display: d, excludingApplications: mine,
-                                                      exceptingWindows: []),
+                              filter: SCContentFilter(display: d, excludingWindows: mine),
                               icon: nil))
         }
 
@@ -127,8 +128,13 @@ struct Source {
         return out
     }
 
+    static func camera(_ device: AVCaptureDevice) -> Source {
+        Source(kind: .camera(device.uniqueID), name: device.localizedName, detail: "fills the whole video",
+               size: CGSize(width: 1920, height: 1080), filter: nil, icon: nil)
+    }
+
     func image(width: CGFloat) async -> CGImage? {
-        guard size.width > 0 else { return nil }
+        guard let filter, size.width > 0 else { return nil }
         let config = SCStreamConfiguration()
         config.width = Int(width)
         config.height = Int(width * size.height / size.width)
@@ -151,6 +157,8 @@ public final class RecordSetupView: ThemedView {
 
     private let cards = FlippedStack()
     private let canvas = AreaCanvas()
+    private let facecam = Facecam()
+    private let recPill = RecPill()
     private let sourceHint = Theme.label("", .meta, color: Theme.textTertiary)
     private let micButton = FillButton("Mic On", icon: .mic)
     private let cameraSwitch = Switch(true)
@@ -160,6 +168,8 @@ public final class RecordSetupView: ThemedView {
     private var cameras: [AVCaptureDevice] = []
     private var timer: Timer?
     private var capturing = false
+    private var bubbleConstraints: [NSLayoutConstraint] = []
+    private var fullConstraints: [NSLayoutConstraint] = []
 
     public override init(frame: NSRect) {
         super.init(frame: frame)
@@ -197,12 +207,37 @@ public final class RecordSetupView: ThemedView {
         let previewCard = Surface(Theme.inset)
         canvas.translatesAutoresizingMaskIntoConstraints = false
         previewCard.addSubview(canvas)
+        facecam.translatesAutoresizingMaskIntoConstraints = false
+        previewCard.addSubview(facecam)
+        recPill.translatesAutoresizingMaskIntoConstraints = false
+        recPill.isHidden = true
+        previewCard.addSubview(recPill)
         canvas.onAreaChange = { [weak self] area in
             self?.settings.area = area
             self?.settings.save()
         }
 
         let bar = buildBar()
+
+        // a corner bubble over the screen, or the whole preview in camera only mode
+        bubbleConstraints = [
+            facecam.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor, constant: -28),
+            facecam.bottomAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: -28),
+            facecam.widthAnchor.constraint(equalTo: previewCard.widthAnchor, multiplier: 0.2),
+            facecam.heightAnchor.constraint(equalTo: facecam.widthAnchor, multiplier: 0.75),
+        ]
+        let fill = facecam.widthAnchor.constraint(equalTo: previewCard.widthAnchor, constant: -32)
+        // below the window's own size priority, or filling the width grows the window
+        fill.priority = .defaultLow
+        fullConstraints = [
+            facecam.centerXAnchor.constraint(equalTo: previewCard.centerXAnchor),
+            facecam.centerYAnchor.constraint(equalTo: previewCard.centerYAnchor),
+            facecam.widthAnchor.constraint(lessThanOrEqualTo: previewCard.widthAnchor, constant: -32),
+            facecam.heightAnchor.constraint(lessThanOrEqualTo: previewCard.heightAnchor, constant: -32),
+            facecam.heightAnchor.constraint(equalTo: facecam.widthAnchor, multiplier: 9.0 / 16.0),
+            fill,
+        ]
+        NSLayoutConstraint.activate(bubbleConstraints)
 
         for v in [title, subtitle, close, sourceHeader, sourceHint, scroll, previewCard, bar] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -237,6 +272,8 @@ public final class RecordSetupView: ThemedView {
             canvas.bottomAnchor.constraint(equalTo: previewCard.bottomAnchor),
             canvas.leadingAnchor.constraint(equalTo: previewCard.leadingAnchor),
             canvas.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor),
+            recPill.topAnchor.constraint(equalTo: previewCard.topAnchor, constant: 28),
+            recPill.leadingAnchor.constraint(equalTo: previewCard.leadingAnchor, constant: 28),
 
             bar.topAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: 16),
             bar.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
@@ -260,14 +297,22 @@ public final class RecordSetupView: ThemedView {
             self.syncControls()
         }
         cameraSwitch.onChange = { [weak self] on in
+            // camera only has nothing to show without it
+            guard self?.settings.capture != .camera else {
+                self?.cameraSwitch.isOn = true
+                return
+            }
             self?.settings.camera = on
             self?.settings.save()
             self?.syncControls()
+            self?.updateFacecam()
         }
         cameraMenu.onChange = { [weak self] name in
             guard let self else { return }
             self.settings.cameraID = self.cameras.first { $0.localizedName == name }?.uniqueID
             self.settings.save()
+            self.updateFacecam()
+            if self.settings.capture == .camera { self.rebuildCards() }
         }
         let settingsButton = FillButton("Settings", icon: .gear)
         settingsButton.onClick = { [weak self, weak settingsButton] in
@@ -280,6 +325,7 @@ public final class RecordSetupView: ThemedView {
             self.settings.capture = c
             self.settings.save()
             self.syncControls()
+            self.updateFacecam()
             self.rebuildCards()
             self.refreshPreview()
         }
@@ -289,7 +335,8 @@ public final class RecordSetupView: ThemedView {
         }
 
         let cameraLabel = Theme.label("Camera:", .body, color: Theme.textSecondary)
-        let row1 = NSStackView(views: [startButton, micButton, cameraLabel, cameraSwitch, cameraMenu, settingsButton])
+        let scriptButton = FillButton("Script", icon: .transcript) { Prompter.shared.toggle() }
+        let row1 = NSStackView(views: [startButton, micButton, cameraLabel, cameraSwitch, cameraMenu, settingsButton, scriptButton])
         row1.spacing = 12
         row1.setCustomSpacing(8, after: cameraLabel)
         row1.setCustomSpacing(10, after: cameraSwitch)
@@ -336,6 +383,7 @@ public final class RecordSetupView: ThemedView {
             deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
             mediaType: .video, position: .unspecified).devices
         syncControls()
+        updateFacecam()
         Task { @MainActor in
             do {
                 self.sources = try await Source.all()
@@ -355,32 +403,73 @@ public final class RecordSetupView: ThemedView {
     public func deactivate() {
         timer?.invalidate()
         timer = nil
+        // the recorder needs the camera to itself
+        facecam.stop()
     }
 
-    public func setRecording(_ live: Bool) {
+    private func updateFacecam() {
+        let full = settings.capture == .camera
+        NSLayoutConstraint.deactivate(full ? bubbleConstraints : fullConstraints)
+        NSLayoutConstraint.activate(full ? fullConstraints : bubbleConstraints)
+        facecam.cornerRadius = full ? 10 : 14
+        if settings.camera || full, !cameras.isEmpty {
+            facecam.start(deviceID: settings.cameraID)
+        } else {
+            facecam.stop()
+        }
+    }
+
+    public func setRecording(_ live: Bool, elapsed: Double = 0, paused: Bool = false) {
         startButton.title = live ? "Stop Recording" : "Start Recording"
         startButton.trailingChevron = !live
+        // nothing about the take can change once it is rolling
+        for c in [captureMenu, cameraMenu, micButton] as [Control] { c.isEnabled = !live }
+        cameraSwitch.isEnabled = !live && settings.capture != .camera
+        recPill.isHidden = !live
+        recPill.text = String(format: "%@ %d:%02d", paused ? "PAUSED" : "REC", Int(elapsed) / 60, Int(elapsed) % 60)
+    }
+
+    /// Camera only keeps this screen up while recording. The countdown runs
+    /// on the preview's own session; the take itself hands the camera to the
+    /// recorder and shows the recorder's session instead.
+    public func pausePreview() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    public func releaseCamera() {
+        facecam.stop(keepVisible: true)
+    }
+
+    public func showLive(_ session: AVCaptureSession) {
+        facecam.show(session)
     }
 
     private func syncControls() {
         micButton.title = settings.mic ? "Mic On" : "Mic Off"
         micButton.icon = settings.mic ? .mic : .micOff
-        cameraSwitch.isOn = settings.camera
+        let cameraOnly = settings.capture == .camera
+        cameraSwitch.isOn = settings.camera || cameraOnly
+        cameraSwitch.isEnabled = !cameraOnly
         let names = cameras.map(\.localizedName)
         cameraMenu.options = names.isEmpty ? ["No camera"] : names
         cameraMenu.selected = cameras.first { $0.uniqueID == settings.cameraID }?.localizedName
             ?? names.first ?? "No camera"
-        cameraMenu.isEnabled = settings.camera && !names.isEmpty
+        cameraMenu.isEnabled = (settings.camera || cameraOnly) && !names.isEmpty
         captureMenu.selected = settings.capture.rawValue
         desktopAudio.value = settings.desktopAudio
+        desktopAudio.isHidden = cameraOnly
         canvas.showsArea = settings.capture == .area
+        canvas.placeholder = cameraOnly ? (cameras.isEmpty ? "No camera found" : "") : "Pick a source to see it here"
+        if cameraOnly { canvas.image = nil }
         canvas.area = settings.area
     }
 
     // MARK: sources
 
     private var visibleSources: [Source] {
-        sources.filter {
+        if settings.capture == .camera { return cameras.map(Source.camera) }
+        return sources.filter {
             if case .app = $0.kind { return settings.capture == .window }
             return settings.capture != .window
         }
@@ -392,6 +481,7 @@ public final class RecordSetupView: ThemedView {
             switch $0.kind {
             case .display(let id): return id == settings.displayID
             case .app(let id): return id == settings.app
+            case .camera(let id): return id == settings.cameraID
             }
         } ?? list.first
     }
@@ -407,9 +497,9 @@ public final class RecordSetupView: ThemedView {
             cards.addArrangedSubview(card)
             Task { @MainActor in card.thumbnail = await source.image(width: 360) }
         }
-        let noun = settings.capture == .window ? "app" : "display"
+        let noun = ["Window": "app", "Camera only": "camera"][settings.capture.rawValue] ?? "display"
         sourceHint.stringValue = list.isEmpty
-            ? (settings.capture == .window ? "no app windows on screen" : "no displays found")
+            ? "no \(noun)s found"
             : "\(list.count) \(noun)\(list.count == 1 ? "" : "s")"
         cards.layoutSubtreeIfNeeded()
     }
@@ -418,6 +508,10 @@ public final class RecordSetupView: ThemedView {
         switch source.kind {
         case .display(let id): settings.displayID = id
         case .app(let id): settings.app = id
+        case .camera(let id):
+            settings.cameraID = id
+            syncControls()
+            updateFacecam()
         }
         settings.save()
         for case let card as SourceCard in cards.arrangedSubviews {
@@ -427,7 +521,7 @@ public final class RecordSetupView: ThemedView {
     }
 
     private func refreshPreview() {
-        guard !capturing, window != nil, !isHiddenOrHasHiddenAncestor else { return }
+        guard !capturing, window != nil, !isHiddenOrHasHiddenAncestor, settings.capture != .camera else { return }
         guard let source = selectedSource else {
             canvas.image = nil
             return
@@ -545,6 +639,10 @@ final class SourceCard: Control {
             img.draw(in: NSRect(x: shot.midX - w / 2, y: shot.midY - h / 2, width: w, height: h),
                      from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
+        if thumbnail == nil, case .camera = source.kind {
+            Icon.camera.draw(in: NSRect(x: shot.midX - 14, y: shot.midY - 14, width: 28, height: 28),
+                             color: Theme.textTertiary)
+        }
         NSGraphicsContext.restoreGraphicsState()
 
         var x: CGFloat = 10
@@ -554,6 +652,9 @@ final class SourceCard: Control {
             x += 21
         } else if case .display = source.kind {
             Icon.display.draw(in: NSRect(x: x, y: 101, width: 14, height: 14), color: Theme.icon)
+            x += 20
+        } else if case .camera = source.kind {
+            Icon.camera.draw(in: NSRect(x: x, y: 101, width: 14, height: 14), color: Theme.icon)
             x += 20
         }
         draw(source.name, in: NSRect(x: x, y: 99, width: bounds.width - x - 10, height: 18),
@@ -578,6 +679,7 @@ final class AreaCanvas: ThemedView {
     var showsArea = false { didSet { needsDisplay = true } }
     var area = CGRect(x: 0.15, y: 0.15, width: 0.7, height: 0.7) { didSet { needsDisplay = true } }
     var onAreaChange: ((CGRect) -> Void)?
+    var placeholder = "Pick a source to see it here" { didSet { needsDisplay = true } }
 
     private enum Grab { case move(CGPoint), handle(Int), draw(CGPoint) }
     private var grab: Grab?
@@ -611,7 +713,7 @@ final class AreaCanvas: ThemedView {
     override func draw(_ dirty: NSRect) {
         let r = imageRect
         guard let image else {
-            let text = "Pick a source to see it here" as NSString
+            let text = placeholder as NSString
             let attrs: [NSAttributedString.Key: Any] = [.font: Theme.Text.body.font,
                                                         .foregroundColor: Theme.textTertiary]
             let s = text.size(withAttributes: attrs)
@@ -704,5 +806,99 @@ final class AreaCanvas: ThemedView {
         let r = imageRect
         return CGPoint(x: min(max((p.x - r.minX) / r.width, 0), 1),
                        y: min(max((p.y - r.minY) / r.height, 0), 1))
+    }
+}
+
+/// Live camera in a bubble, so you can check framing and light before a take.
+/// Mirrored, the way a mirror looks, which is what people expect of themselves.
+final class Facecam: NSView {
+    private var session: AVCaptureSession?
+    private var deviceID: String?
+    private let preview = AVCaptureVideoPreviewLayer()
+    var cornerRadius: CGFloat = 14 { didSet { layer?.cornerRadius = cornerRadius } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 14
+        layer?.masksToBounds = true
+        layer?.borderWidth = 2
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        layer?.backgroundColor = NSColor.black.cgColor
+        preview.videoGravity = .resizeAspectFill
+        preview.setAffineTransform(CGAffineTransform(scaleX: -1, y: 1))
+        layer?.addSublayer(preview)
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        preview.frame = bounds
+    }
+
+    /// Shows a session someone else owns, like the recorder's.
+    func show(_ other: AVCaptureSession) {
+        stop(keepVisible: true)
+        preview.session = other
+        isHidden = false
+    }
+
+    func start(deviceID: String?) {
+        if session != nil, deviceID == self.deviceID { return }
+        stop()
+        Task { @MainActor in
+            guard await WebcamRecorder.requestAccess() else {
+                Log.line("facecam: camera permission denied")
+                return
+            }
+            let device = deviceID.flatMap { AVCaptureDevice(uniqueID: $0) } ?? AVCaptureDevice.default(for: .video)
+            guard let device, let input = try? AVCaptureDeviceInput(device: device) else {
+                Log.line("facecam: no camera to show")
+                return
+            }
+            let session = AVCaptureSession()
+            guard session.canAddInput(input) else { return }
+            session.addInput(input)
+            self.preview.session = session
+            self.session = session
+            self.deviceID = deviceID
+            self.isHidden = false
+            DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
+            Log.line("facecam: showing \(device.localizedName)")
+        }
+    }
+
+    func stop(keepVisible: Bool = false) {
+        preview.session = nil
+        if !keepVisible { isHidden = true }
+        guard let session else { return }
+        self.session = nil
+        deviceID = nil
+        // stopRunning blocks, so the recorder gets the camera once this returns
+        session.stopRunning()
+    }
+}
+
+/// Red "REC 0:12" tag over the live camera.
+final class RecPill: ThemedView {
+    var text = "REC 0:00" { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+
+    private var attrs: [NSAttributedString.Key: Any] {
+        [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.white]
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: ceil((text as NSString).size(withAttributes: attrs).width) + 34, height: 24)
+    }
+
+    override func draw(_ dirty: NSRect) {
+        NSColor.black.withAlphaComponent(0.6).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2).fill()
+        Theme.record.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 10, y: bounds.midY - 4, width: 8, height: 8)).fill()
+        let size = (text as NSString).size(withAttributes: attrs)
+        (text as NSString).draw(at: NSPoint(x: 24, y: bounds.midY - size.height / 2), withAttributes: attrs)
     }
 }
