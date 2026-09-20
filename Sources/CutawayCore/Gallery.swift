@@ -4,6 +4,39 @@ import AppKit
 /// references without launching the app or needing capture permission.
 enum Gallery {
 
+    /// Every icon at three sizes, to check the set holds together.
+    static func icons(to url: URL) {
+        let columns = 9
+        let cell: CGFloat = 76
+        let rows = (Icon.allCases.count + columns - 1) / columns
+        let size = NSSize(width: CGFloat(columns) * cell, height: CGFloat(rows) * cell + 20)
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2),
+                                   pixelsHigh: Int(size.height * 2), bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                   colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.size = size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: size).fill()
+
+        for (i, icon) in Icon.allCases.enumerated() {
+            let x = CGFloat(i % columns) * cell
+            let y = size.height - CGFloat(i / columns + 1) * cell
+            let ink = NSColor(white: 0.15, alpha: 1)
+            icon.draw(in: NSRect(x: x + 8, y: y + 36, width: 26, height: 26), color: ink)
+            icon.draw(in: NSRect(x: x + 38, y: y + 40, width: 18, height: 18), color: ink)
+            icon.draw(in: NSRect(x: x + 58, y: y + 42, width: 14, height: 14), color: ink)
+            (icon.rawValue as NSString).draw(
+                at: NSPoint(x: x + 8, y: y + 16),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 9),
+                                 .foregroundColor: NSColor(white: 0.5, alpha: 1)])
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+
+
     static func render(dark: Bool, to url: URL) throws {
         let size = NSSize(width: 860, height: 470)
         let root = Surface(Theme.canvas, radius: 0)

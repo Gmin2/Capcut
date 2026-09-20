@@ -583,3 +583,33 @@ final class ShotNamingTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
     }
 }
+
+final class SpeedTests: XCTestCase {
+
+    private func timeline(speed: Double) -> Timeline {
+        var p = Project()
+        p.speed = speed
+        p.segments = [Segment(sourceStart: 0, sourceEnd: 60)]
+        return p.timeline(sourceSize: CGSize(width: 1920, height: 1080),
+                          events: Events(), sourceDuration: 60, transcript: nil)
+    }
+
+    func testDoubleSpeedHalvesTheOutput() {
+        XCTAssertEqual(timeline(speed: 1).timeMap.outputDuration, 60, accuracy: 0.01)
+        XCTAssertEqual(timeline(speed: 2).timeMap.outputDuration, 30, accuracy: 0.01)
+        XCTAssertEqual(timeline(speed: 0.5).timeMap.outputDuration, 120, accuracy: 0.01)
+    }
+
+    /// Auto cut already speeds up the quiet parts; a project speed multiplies
+    /// that rather than flattening it.
+    func testProjectSpeedMultipliesASpedUpSpan() {
+        var p = Project()
+        p.speed = 2
+        p.segments = [Segment(sourceStart: 0, sourceEnd: 40),
+                      Segment(sourceStart: 40, sourceEnd: 60, speed: 4)]
+        let map = p.timeline(sourceSize: CGSize(width: 1920, height: 1080),
+                             events: Events(), sourceDuration: 60, transcript: nil).timeMap
+        // 40s at 2x plus 20s at 8x
+        XCTAssertEqual(map.outputDuration, 20 + 2.5, accuracy: 0.01)
+    }
+}

@@ -36,6 +36,9 @@ public struct Project: Codable {
     public var masks: [Mask] = []
     /// 0 off, 1 is roughly a film shutter.
     public var motionBlur: Double = 0.85
+    /// Speed for the whole take, on top of whatever each cut span already
+    /// does. 1.25 is the usual demo trick: brisk without sounding silly.
+    public var speed: Double = 1
     /// Shorthand for style.background. Names: midnight, slate, ember, forest,
     /// paper, ink, screen.
     public var backgroundPreset: String?
@@ -83,6 +86,7 @@ public struct Project: Codable {
         layouts = get(.layouts, [:])
         masks = get(.masks, [])
         motionBlur = get(.motionBlur, 0.85)
+        speed = get(.speed, 1)
         backgroundPreset = try? c.decode(String.self, forKey: .backgroundPreset)
         voiceover = try? c.decode(Voiceover.self, forKey: .voiceover)
     }
@@ -175,7 +179,13 @@ public struct Project: Codable {
     func trimmedSegments(sourceDuration: Double) -> [Segment] {
         let lo = max(0, trimStart)
         let hi = min(trimEnd ?? sourceDuration, sourceDuration)
-        guard hi > lo else { return segments }
+        guard hi > lo else {
+            return segments.map {
+                var s = $0
+                s.speed *= max(speed, 0.1)
+                return s
+            }
+        }
 
         let base = segments.isEmpty
             ? [Segment(sourceStart: 0, sourceEnd: sourceDuration)]
@@ -187,6 +197,7 @@ public struct Project: Codable {
             var out = s
             out.sourceStart = a
             out.sourceEnd = b
+            out.speed = s.speed * max(speed, 0.1)
             return out
         }
     }

@@ -53,7 +53,7 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
         window.title = url?.lastPathComponent ?? "Capture"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.minSize = NSSize(width: 620, height: 460)
+        window.minSize = NSSize(width: 780, height: 500)
         window.delegate = self
         window.center()
         window.contentView = buildLayout()
@@ -79,7 +79,7 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
         let scale = NSScreen.main?.backingScaleFactor ?? 2
         let w = CGFloat(image.width) / scale + 120
         let h = CGFloat(image.height) / scale + 200
-        return NSSize(width: min(max(w, 720), screen.width - 40),
+        return NSSize(width: min(max(w, 820), screen.width - 40),
                       height: min(max(h, 520), screen.height - 40))
     }
 
@@ -124,9 +124,12 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
 
         let undo = IconButton(.undo, transparent: true) { [weak self] in self?.undo() }
         undo.toolTip = "Undo"
-        let copy = FillButton("Copy") { [weak self] in self?.copyToClipboard() }
-        let save = FillButton("Save", icon: .download) { [weak self] in self?.saveToDisk() }
-        let done = FillButton("Done") { [weak self] in self?.finishUp() }
+        // icon only: with labels the pill outgrows a narrow window
+        let copy = IconButton(.copy) { [weak self] in self?.copyToClipboard() }
+        copy.toolTip = "Copy the marked up image"
+        let save = IconButton(.download) { [weak self] in self?.saveToDisk() }
+        save.toolTip = "Save"
+        let done = FillButton("Done", icon: .check) { [weak self] in self?.finishUp() }
         done.toolTip = "Save and close"
 
         let row = NSStackView(views: [tools, Divider.vertical(), colorButton, widthButton,
@@ -156,10 +159,14 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
             row.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -14),
             toolbar.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             toolbar.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -22),
+            toolbar.leadingAnchor.constraint(greaterThanOrEqualTo: root.leadingAnchor, constant: 16),
+            toolbar.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -16),
             toolbar.heightAnchor.constraint(equalToConstant: 52),
             undo.widthAnchor.constraint(equalToConstant: 30),
             undo.heightAnchor.constraint(equalToConstant: 30),
+            copy.widthAnchor.constraint(equalToConstant: 30),
             copy.heightAnchor.constraint(equalToConstant: 30),
+            save.widthAnchor.constraint(equalToConstant: 30),
             save.heightAnchor.constraint(equalToConstant: 30),
             done.heightAnchor.constraint(equalToConstant: 30),
             colorButton.widthAnchor.constraint(equalToConstant: 30),

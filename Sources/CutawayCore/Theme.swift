@@ -103,31 +103,6 @@ public enum Theme {
     }
 }
 
-extension Icon {
-    private static var cache: [Icon: NSImage] = [:]
-
-    var image: NSImage? {
-        if let hit = Icon.cache[self] { return hit }
-        guard let img = NSImage(data: Data(svg.utf8)) else { return nil }
-        img.isTemplate = true
-        Icon.cache[self] = img
-        return img
-    }
-
-    /// Draws the icon in one flat colour. Template images only tint themselves
-    /// inside image views, so custom-drawn controls do it by hand.
-    func draw(in rect: NSRect, color: NSColor) {
-        guard let img = image, let ctx = NSGraphicsContext.current?.cgContext else { return }
-        ctx.saveGState()
-        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-        img.draw(in: rect)
-        color.setFill()
-        rect.fill(using: .sourceIn)
-        ctx.endTransparencyLayer()
-        ctx.restoreGState()
-    }
-}
-
 // MARK: - base
 
 /// A view that repaints when the theme changes, so tokens re-resolve.

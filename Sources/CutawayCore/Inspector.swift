@@ -104,6 +104,12 @@ public final class InspectorView: ThemedView {
         add(pickerRow("Frame", ["none", "macWindow", "browser", "phone"], p.deviceFrame.rawValue) { name in
             { $0.deviceFrame = DeviceFrame(rawValue: name) ?? .none }
         }, gap: 2)
+        // speed of the finished video, not of the preview: this one exports
+        add(pickerRow("Speed", ["0.75×", "1×", "1.25×", "1.5×", "2×"],
+                      p.speed == 1 ? "1×" : "\(p.speed.clean)×") { name in
+            let value = Double(name.replacingOccurrences(of: "×", with: "")) ?? 1
+            return { $0.speed = value }
+        }, gap: 2)
 
         section("Camera")
         scrub("Cursor size", p.cursor.scale, 0.8...3.0, 0.1) { $0.cursor.scale = $1 }

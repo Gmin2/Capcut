@@ -38,6 +38,13 @@ public enum CLI {
             case "displays": return try await displays()
             case "list":     return list()
             case "voices":   return voices()
+            case "icons":
+                return await MainActor.run {
+                    let out = Options(args).url("--out") ?? URL(fileURLWithPath: "icons.png")
+                    Gallery.icons(to: out)
+                    emit(out.path)
+                    return 0
+                }
             case "gallery":
                 let o = Options(args)
                 let base = o.url("--out") ?? URL(fileURLWithPath: "gallery.png")

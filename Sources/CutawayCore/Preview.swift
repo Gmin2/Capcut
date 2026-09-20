@@ -26,6 +26,15 @@ public final class PreviewController: NSObject, MTKViewDelegate {
     public private(set) var sourceDuration: Double = 0
     /// Position in edited time; `sourceTime` is where that lands in the media.
     public private(set) var currentTime: Double = 0
+    /// How fast the preview runs. The edit itself is untouched: this is the
+    /// same footage at a different playback speed, like a player's 1.5×.
+    public var rate: Double = 1 {
+        didSet {
+            guard playing else { return }
+            playFrom = currentTime
+            playStart = Date()
+        }
+    }
     public var sourceTime: Double { timeMap.sourceTime(forOutput: currentTime) }
 
     /// Nearest playable output time for a source moment, so clicking a cut
@@ -142,7 +151,7 @@ public final class PreviewController: NSObject, MTKViewDelegate {
               let drawable = view.currentDrawable else { return }
 
         if playing {
-            currentTime = playFrom + Date().timeIntervalSince(playStart)
+            currentTime = playFrom + Date().timeIntervalSince(playStart) * rate
             if currentTime >= duration - 0.01 { currentTime = duration; pause() }
             onTimeChange?(currentTime)
         }

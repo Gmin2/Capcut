@@ -355,8 +355,12 @@ final class AnnotateCanvas: ThemedView {
         FrameRenderer.draw(image: image, frame: dressing, in: frameRect, imageRect: imageRect,
                            scale: scale)
         let all = draft.map { marks + [$0] } ?? marks
+        // clipped to the picture, because the export is
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: imageRect).addClip()
         MarkRenderer.draw(all, selected: selected, pixelated: pixelatedImage(),
                           imageSize: imageSize, in: imageRect)
+        NSGraphicsContext.restoreGraphicsState()
         if isCropping { drawCrop() }
     }
 

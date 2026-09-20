@@ -1,77 +1,284 @@
 import AppKit
 
-public enum Icon: String {
-    case chevronDown
-    case chevronLeft
-    case chevronRight
-    case gear
-    case mic
-    case micOff
-    case camera
-    case volume
-    case keyboard
-    case display
-    case area
-    case scissors
-    case zoom
-    case plus
-    case trash
-    case folder
-    case download
-    case sidebar
-    case expand
-    case layers
-    case transcript
-    case bookmark
-    case undo
-    case pointer
-    case arrowTool
-    case square
-    case shapes
-    case textTool
-    case highlight
-    case droplet
-    case numbered
-    case image
-    case ratio
-    case pen
+/// Cutaway's own icons, drawn rather than imported.
+///
+/// Every one is built on a 20 by 20 grid with a 1.7 stroke, round caps and
+/// round joins, so the whole set shares a weight and a rhythm no matter what
+/// size it is drawn at. Shapes are deliberately plain: a rounded rectangle, a
+/// circle, a straight line. That keeps them legible at 14 points, which is
+/// where most of them live.
+public enum Icon: String, CaseIterable {
+    case chevronDown, chevronLeft, chevronRight
+    case gear, mic, micOff, camera, volume, keyboard, display, area
+    case scissors, zoom, plus, trash, folder, download, sidebar, expand
+    case layers, transcript, bookmark, undo
+    case pointer, arrowTool, square, shapes, textTool, highlight, droplet
+    case numbered, image, ratio, pen
+    case copy, check
 
-    var svg: String {
-        switch self {
-        case .chevronDown: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><polyline points=\"1.75 4.25 6 8.5 10.25 4.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></polyline></svg> "
-        case .chevronLeft: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><polyline points=\"7.75 1.75 3.5 6 7.75 10.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></polyline></svg> "
-        case .chevronRight: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><polyline points=\"4.25 10.25 8.5 6 4.25 1.75\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></polyline></svg> "
-        case .gear: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><line x1=\"4\" y1=\"2.536\" x2=\"6\" y2=\"6\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"10\" y1=\"6\" x2=\"6\" y2=\"6\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"4\" y1=\"9.464\" x2=\"6\" y2=\"6\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><circle cx=\"6\" cy=\"6\" r=\"4\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></circle><line x1=\"6\" y1=\".75\" x2=\"6\" y2=\"2\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"3.375\" y1=\"1.453\" x2=\"4\" y2=\"2.536\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"1.453\" y1=\"3.375\" x2=\"2.536\" y2=\"4\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\".75\" y1=\"6\" x2=\"2\" y2=\"6\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"1.453\" y1=\"8.625\" x2=\"2.536\" y2=\"8\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"3.375\" y1=\"10.547\" x2=\"4\" y2=\"9.464\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"6\" y1=\"11.25\" x2=\"6\" y2=\"10\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"8.625\" y1=\"10.547\" x2=\"8\" y2=\"9.464\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"10.547\" y1=\"8.625\" x2=\"9.464\" y2=\"8\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"11.25\" y1=\"6\" x2=\"10\" y2=\"6\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"10.547\" y1=\"3.375\" x2=\"9.464\" y2=\"4\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"8.625\" y1=\"1.453\" x2=\"8\" y2=\"2.536\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line></svg> "
-        case .mic: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><path d=\"m10.75,5c0,2.619-2.131,4.75-4.75,4.75S1.25,7.619,1.25,5\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></path><rect x=\"3.75\" y=\".75\" width=\"4.5\" height=\"6.5\" rx=\"2.25\" ry=\"2.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></rect><line x1=\"6\" y1=\"9.75\" x2=\"6\" y2=\"11.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line></svg> "
-        case .micOff: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><path d=\"M12.25 5.75V5C12.25 3.2051 10.795 1.75 9 1.75C7.205 1.75 5.75 3.2051 5.75 5V8C5.75 9.1534 6.35079 10.1665 7.25659 10.7433\" stroke=\"black\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M5.10901 12.891C3.67201 11.746 2.75 9.98 2.75 8\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M15.25 8C15.25 11.452 12.452 14.25 8.99997 14.25C8.68107 14.25 8.36806 14.2262 8.06226 14.1802\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M9 14.25V16.25\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M2 16L16 2\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path></svg> "
-        case .camera: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><polygon points=\"11.25 3.75 8.75 6 11.25 8.25 11.25 3.75\" fill=\"#000\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></polygon><circle cx=\"3.25\" cy=\"4.25\" r=\".75\" fill=\"#000\" stroke-width=\"0\"></circle><rect x=\".753\" y=\"1.75\" width=\"8\" height=\"8.5\" rx=\"2\" ry=\"2\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></rect></svg> "
-        case .volume: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><path d=\"M5,5.75H2.25c-.828,0-1.5,.672-1.5,1.5v3.5c0,.828,.672,1.5,1.5,1.5h2.75l5.48,3.508c.333,.213,.77-.026,.77-.421V2.664c0-.395-.437-.634-.77-.421l-5.48,3.508Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path><path d=\"M13.914,7.586c.781,.781,.781,2.047,0,2.828\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path><path d=\"M15.859,5.641c1.855,1.855,1.855,4.863,0,6.718\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path></svg> "
-        case .keyboard: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><rect x=\".75\" y=\"4.75\" width=\"16.5\" height=\"8.5\" rx=\"2\" ry=\"2\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></rect><line x1=\"11.75\" y1=\"10.25\" x2=\"6.25\" y2=\"10.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></line><rect x=\"3\" y=\"7\" width=\"1.5\" height=\"1.5\" rx=\".5\" ry=\".5\" fill=\"#000\"></rect><rect x=\"3\" y=\"9.5\" width=\"1.5\" height=\"1.5\" rx=\".5\" ry=\".5\" fill=\"#000\"></rect><rect x=\"5.5\" y=\"7\" width=\"1.5\" height=\"1.5\" rx=\".5\" ry=\".5\" fill=\"#000\"></rect><rect x=\"8.25\" y=\"7\" width=\"1.5\" height=\"1.5\" rx=\".5\" ry=\".5\" fill=\"#000\"></rect><rect x=\"13.5\" y=\"7\" width=\"1.5\" height=\"1.5\" rx=\".5\" ry=\".5\" fill=\"#000\"></rect><rect x=\"13.5\" y=\"9.5\" width=\"1.5\" height=\"1.5\" rx=\".5\" ry=\".5\" fill=\"#000\"></rect><rect x=\"11\" y=\"7\" width=\"1.5\" height=\"1.5\" rx=\".5\" ry=\".5\" fill=\"#000\"></rect></svg> "
-        case .display: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><path d=\"M4.75 10.75H2.75C2.198 10.75 1.75 10.302 1.75 9.75V5.25C1.75 4.698 2.198 4.25 2.75 4.25H4.75\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M14.75 2.75H9.25C8.422 2.75 7.75 3.4216 7.75 4.25V13.75C7.75 14.5784 8.422 15.25 9.25 15.25H14.75C15.578 15.25 16.25 14.5784 16.25 13.75V4.25C16.25 3.4216 15.578 2.75 14.75 2.75Z\" stroke=\"black\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M5.25 13.25C3.708 13.25 2.75 14 2.75 14\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M12 13C12.552 13 13 12.5523 13 12C13 11.4477 12.552 11 12 11C11.448 11 11 11.4477 11 12C11 12.5523 11.448 13 12 13Z\" fill=\"black\"></path> <path d=\"M10.75 5.75H13.25\" stroke=\"black\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M10.75 8.25H13.25\" stroke=\"black\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path></svg> "
-        case .area: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><circle cx=\"2.75\" cy=\"9\" r=\".75\" fill=\"#000\"></circle><circle cx=\"9\" cy=\"2.75\" r=\".75\" fill=\"#000\"></circle><circle cx=\"2.75\" cy=\"2.75\" r=\".75\" fill=\"#000\"></circle><circle cx=\"2.75\" cy=\"5.875\" r=\".75\" fill=\"#000\"></circle><circle cx=\"2.75\" cy=\"12.125\" r=\".75\" fill=\"#000\"></circle><circle cx=\"2.75\" cy=\"15.25\" r=\".75\" fill=\"#000\"></circle><circle cx=\"15.25\" cy=\"2.75\" r=\".75\" fill=\"#000\"></circle><circle cx=\"15.25\" cy=\"5.875\" r=\".75\" fill=\"#000\"></circle><circle cx=\"12.125\" cy=\"2.75\" r=\".75\" fill=\"#000\"></circle><circle cx=\"5.875\" cy=\"2.75\" r=\".75\" fill=\"#000\"></circle><circle cx=\"5.875\" cy=\"15.25\" r=\".75\" fill=\"#000\"></circle><polyline points=\"9.25 15.25 9.25 9.25 15.25 9.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></polyline><line x1=\"9.25\" y1=\"9.25\" x2=\"15.25\" y2=\"15.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></line></svg> "
-        case .scissors: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><path d=\"M13.5135 7.75H16.25\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M4 7.75H9.25\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M4 7.75C5.243 7.75 6.25 6.743 6.25 5.5C6.25 4.257 5.243 3.25 4 3.25C2.757 3.25 1.75 4.257 1.75 5.5C1.75 6.743 2.757 7.75 4 7.75Z\" stroke=\"#000\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M5.409 11.659L14 3\" stroke=\"black\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path> <path d=\"M7 15.5C8.243 15.5 9.25 14.493 9.25 13.25C9.25 12.007 8.243 11 7 11C5.757 11 4.75 12.007 4.75 13.25C4.75 14.493 5.757 15.5 7 15.5Z\" stroke=\"black\" stroke-width=\"1.53\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"></path></svg> "
-        case .zoom: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><line x1=\"7.652\" y1=\"7.652\" x2=\"10.75\" y2=\"10.75\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><circle cx=\"5\" cy=\"5\" r=\"3.75\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></circle></svg> "
-        case .plus: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><line x1=\"10.75\" y1=\"6\" x2=\"1.25\" y2=\"6\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><line x1=\"6\" y1=\"10.75\" x2=\"6\" y2=\"1.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line></svg> "
-        case .trash: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><line x1=\"1\" y1=\"2.25\" x2=\"11\" y2=\"2.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></line><path d=\"m4.75,2.25v-1c0-.276.224-.5.5-.5h1.5c.276,0,.5.224.5.5v1\" fill=\"#000\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></path><path d=\"m9.5,4.75l-.195,5.058c-.031.805-.693,1.442-1.499,1.442h-3.613c-.806,0-1.468-.637-1.499-1.442l-.195-5.058\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></path></svg> "
-        case .folder: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><path d=\"m.75,7.25V3.25c0-1.105.895-2,2-2h1.701c.607,0,1.18.275,1.56.748l.603.752h2.636c1.105,0,2,.895,2,2v2.5\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></path><path d=\"m2.75,5.25h6.5c1.105,0,2,.895,2,2v1.5c0,1.105-.895,2-2,2H2.75c-1.105,0-2-.895-2-2v-1.5c0-1.105.895-2,2-2Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></path></svg> "
-        case .download: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><polyline points=\"12 1 12 17 12 16\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></polyline><polyline points=\"16 13 12 17 8 13\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></polyline><path d=\"m16,8h2c1.105,0,2,.895,2,2v9c0,1.105-.895,2-2,2H6c-1.105,0-2-.895-2-2v-9c0-1.105.895-2,2-2h2\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path></svg> "
-        case .sidebar: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><line x1=\"15\" y1=\"4\" x2=\"15\" y2=\"20\" fill=\"none\" stroke=\"#000\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></line><rect x=\"4\" y=\"2\" width=\"16\" height=\"20\" rx=\"2\" ry=\"2\" transform=\"translate(24) rotate(90)\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></rect></svg> "
-        case .expand: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><path d=\"m3,8v-3c0-1.105.895-2,2-2h3\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path><path d=\"m16,3h3c1.105,0,2,.895,2,2v3\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path><path d=\"m21,16v3c0,1.105-.895,2-2,2h-3\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path><path d=\"m8,21h-3c-1.105,0-2-.895-2-2v-3\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path><rect x=\"8\" y=\"8\" width=\"8\" height=\"8\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></rect></svg> "
-        case .layers: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><polyline points=\"21 12 12 17 3 12\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></polyline><polyline points=\"21 17 12 22 3 17\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></polyline><polygon points=\"3 7 12 2 21 7 12 12 3 7\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></polygon></svg> "
-        case .transcript: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><path d=\"M20 4C20 2.89543 19.1046 2 18 2H11.0784C10.548 2 10.0393 2.21071 9.66421 2.58579L4.58579 7.66421C4.21071 8.03929 4 8.54799 4 9.07843L4 20C4 21.1046 4.89543 22 6 22H18C19.1046 22 20 21.1046 20 20V4Z\" stroke=\"black\" stroke-width=\"2.04\" stroke-miterlimit=\"10\" stroke-linecap=\"square\" fill=\"none\"></path> <path d=\"M4 9H11V2\" stroke=\"black\" stroke-width=\"2.04\" stroke-miterlimit=\"10\" fill=\"none\"></path> <path d=\"M15 9H16\" stroke=\"#000\" stroke-width=\"2.04\" stroke-miterlimit=\"10\" stroke-linecap=\"square\" fill=\"none\"></path> <path d=\"M8 13H16\" stroke=\"#000\" stroke-width=\"2.04\" stroke-miterlimit=\"10\" stroke-linecap=\"square\" fill=\"none\"></path> <path d=\"M8 17H16\" stroke=\"#000\" stroke-width=\"2.04\" stroke-miterlimit=\"10\" stroke-linecap=\"square\" fill=\"none\"></path></svg> "
-        case .bookmark: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><path d=\"m20,22l-8-5-8,5V4c0-1.105.895-2,2-2h12c1.105,0,2,.895,2,2v18Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path></svg> "
-        case .undo: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\" viewBox=\"0 0 20 20\"><path d=\"m5,5.101c1.271-1.297,3.041-2.101,5-2.101,3.866,0,7,3.134,7,7s-3.134,7-7,7c-2.792,0-5.203-1.635-6.326-4\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.70\"></path><polygon points=\"4.367 3.044 3.771 6.798 7.516 6.145 4.367 3.044\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.70\" fill=\"#000\"></polygon></svg> "
-        case .pointer: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"12\" height=\"12\" viewBox=\"0 0 12 12\"><path d=\"m1.455.814l9.367,3.422c.447.163.434.801-.019.946l-4.258,1.363-1.363,4.258c-.145.454-.782.467-.946.019L.814,1.455c-.146-.399.242-.787.641-.641Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.02\"></path></svg> "
-        case .arrowTool: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\" viewBox=\"0 0 20 20\"><line x1=\"4\" y1=\"16\" x2=\"16\" y2=\"4\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.70\"></line><polyline points=\"16 11 16 4 9 4\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.70\"></polyline></svg> "
-        case .square: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><path d=\"m19,21H5c-1.105,0-2-.895-2-2V5c0-1.105.895-2,2-2h14c1.105,0,2,.895,2,2v14c0,1.105-.895,2-2,2Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path><rect x=\"7\" y=\"7\" width=\"3\" height=\"3\" fill=\"#000\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></rect><rect x=\"7\" y=\"14\" width=\"3\" height=\"3\" fill=\"#000\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></rect><rect x=\"14\" y=\"7\" width=\"3\" height=\"3\" fill=\"#000\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></rect><rect x=\"14\" y=\"14\" width=\"3\" height=\"3\" fill=\"#000\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></rect></svg> "
-        case .shapes: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><circle cx=\"13.5\" cy=\"6\" r=\"3.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></circle><rect x=\"4.75\" y=\"10.75\" width=\"5.5\" height=\"5.5\" rx=\"1\" ry=\"1\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></rect><path d=\"M3.818,1.99L1.189,6.498c-.194,.333,.046,.752,.432,.752H6.879c.386,0,.626-.419,.432-.752L4.682,1.99c-.193-.331-.671-.331-.864,0Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path></svg> "
-        case .textTool: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><path d=\"M16.25,12v.75c0,1.105-.895,2-2,2H3.75c-1.105,0-2-.895-2-2v-.75\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path><path d=\"M1.75,6v-.75c0-1.105,.895-2,2-2H14.25c1.105,0,2,.895,2,2v.75\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path><polyline points=\"11.798 12.25 9.068 5.75 8.932 5.75 6.202 12.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></polyline><line x1=\"6.832\" y1=\"10.75\" x2=\"11.168\" y2=\"10.75\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></line><circle cx=\"1.75\" cy=\"9\" r=\".75\" fill=\"#000\"></circle><circle cx=\"16.25\" cy=\"9\" r=\".75\" fill=\"#000\"></circle></svg> "
-        case .highlight: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><line x1=\"6.545\" y1=\"15.25\" x2=\"14.25\" y2=\"15.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></line><path d=\"M9.789,12.123l-4.884-2.466c-.539-.272-.716-.957-.375-1.456l3.766-5.523c.565-.829,1.658-1.111,2.554-.659l1.557,.786c.896,.452,1.318,1.499,.986,2.446l-2.208,6.309c-.2,.57-.855,.835-1.395,.562Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path><path d=\"M10.023,12.245c-1.994,.516-2.965,1.989-3.252,2.559l-1.116-.563s-1.116-.563-1.116-.563c.288-.57,.896-2.226,.128-4.136\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path><polyline points=\"6.77 14.804 6.545 15.25 3.75 15.25 4.539 13.677\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></polyline></svg> "
-        case .droplet: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><path d=\"m4,14C4,8.516,12,1.375,12,1.375c0,0,8,7.125,8,12.625,0,5.1-4.1,8-8,8s-8-2.9-8-8Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path><path d=\"m12,18c-1.608,0-4-1.065-4-4\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"square\" stroke-miterlimit=\"10\" stroke-width=\"2.04\"></path></svg> "
-        case .numbered: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><path d=\"M2.5,11.661c.259-.921,1.152-1.425,2.116-1.411,.965,.014,1.872,.446,1.929,1.411s-.965,1.612-2.023,2.044c-1.058,.432-1.936,.835-2.023,2.044H6.548\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path><line x1=\"9.5\" y1=\"5.25\" x2=\"16.25\" y2=\"5.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></line><line x1=\"9.5\" y1=\"12.75\" x2=\"16.25\" y2=\"12.75\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></line><path d=\"M4.75,7.5V2s-.63,1.108-1.967,1.364\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path></svg> "
-        case .image: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><path d=\"M22 18L22 6C22 4.89543 21.1046 4 20 4L4 4C2.89543 4 2 4.89543 2 6L2 18C2 19.1046 2.89543 20 4 20L20 20C21.1046 20 22 19.1046 22 18Z\" stroke=\"black\" stroke-width=\"2.04\" stroke-miterlimit=\"10\" stroke-linecap=\"square\" fill=\"none\"></path> <path d=\"M2 18L6.5 13L10.5 16.5L16.5 9L22 16\" stroke=\"black\" stroke-width=\"2.04\" stroke-miterlimit=\"10\" fill=\"none\"></path> <path d=\"M9 10C9.55228 10 10 9.55228 10 9C10 8.44772 9.55228 8 9 8C8.44772 8 8 8.44772 8 9C8 9.55228 8.44772 10 9 10Z\" fill=\"#000\" stroke=\"#000\" stroke-width=\"2.04\" stroke-miterlimit=\"10\" stroke-linecap=\"square\"></path></svg> "
-        case .ratio: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><rect x=\"2.75\" y=\"2.75\" width=\"12.5\" height=\"12.5\" rx=\"2\" ry=\"2\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></rect><polyline points=\"12.25 8.75 12.25 5.75 9.25 5.75\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></polyline><polyline points=\"8.75 12.25 5.75 12.25 5.75 9.25\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></polyline></svg> "
-        case .pen: return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\"><path d=\"M10,5l3.586,3.586c.781,.781,.781,2.047,0,2.828l-1.586,1.586\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path><path d=\"M2.75,15.25s3.599-.568,4.546-1.515c.947-.947,7.327-7.327,7.327-7.327,.837-.837,.837-2.194,0-3.03-.837-.837-2.194-.837-3.03,0,0,0-6.38,6.38-7.327,7.327s-1.515,4.546-1.515,4.546h0Z\" fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.53\"></path></svg> "
+    /// The grid every icon is drawn on.
+    static let grid: CGFloat = 20
+    static let stroke: CGFloat = 1.7
+
+    public func draw(in rect: NSRect, color: NSColor) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let scale = min(rect.width, rect.height) / Icon.grid
+        ctx.saveGState()
+        ctx.translateBy(x: rect.midX - Icon.grid * scale / 2,
+                        y: rect.midY - Icon.grid * scale / 2)
+        ctx.scaleBy(x: scale, y: scale)
+        // Icons are described top-down, the way they are drawn on paper. Most
+        // of the app's views are already flipped, so only flip when they are not.
+        if NSGraphicsContext.current?.isFlipped != true {
+            ctx.translateBy(x: 0, y: Icon.grid)
+            ctx.scaleBy(x: 1, y: -1)
         }
+
+        color.setStroke()
+        color.setFill()
+        let ink = Ink()
+        shape(ink)
+        ink.strokePath.lineWidth = Icon.stroke
+        ink.strokePath.lineCapStyle = .round
+        ink.strokePath.lineJoinStyle = .round
+        ink.strokePath.stroke()
+        ink.fillPath.fill()
+        ctx.restoreGState()
+    }
+
+    /// Two paths: one stroked, one filled. Most icons only use the first.
+    final class Ink {
+        let strokePath = NSBezierPath()
+        let fillPath = NSBezierPath()
+
+        func line(_ a: CGPoint, _ b: CGPoint) {
+            strokePath.move(to: a)
+            strokePath.line(to: b)
+        }
+
+        func poly(_ points: [CGPoint], close: Bool = false) {
+            guard let first = points.first else { return }
+            strokePath.move(to: first)
+            for p in points.dropFirst() { strokePath.line(to: p) }
+            if close { strokePath.close() }
+        }
+
+        func rect(_ r: NSRect, radius: CGFloat = 3) {
+            strokePath.append(NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius))
+        }
+
+        func circle(_ centre: CGPoint, _ r: CGFloat) {
+            strokePath.append(NSBezierPath(ovalIn: NSRect(x: centre.x - r, y: centre.y - r,
+                                                          width: r * 2, height: r * 2)))
+        }
+
+        func dot(_ centre: CGPoint, _ r: CGFloat) {
+            fillPath.append(NSBezierPath(ovalIn: NSRect(x: centre.x - r, y: centre.y - r,
+                                                        width: r * 2, height: r * 2)))
+        }
+
+        func blob(_ points: [CGPoint]) {
+            guard let first = points.first else { return }
+            fillPath.move(to: first)
+            for p in points.dropFirst() { fillPath.line(to: p) }
+            fillPath.close()
+        }
+
+        func arc(_ centre: CGPoint, _ r: CGFloat, from: CGFloat, to: CGFloat) {
+            strokePath.appendArc(withCenter: centre, radius: r, startAngle: from, endAngle: to)
+        }
+    }
+
+    private func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: y) }
+
+    // swiftlint:disable:next cyclomatic_complexity
+    private func shape(_ ink: Ink) {
+        switch self {
+        case .chevronDown:  ink.poly([p(5, 8), p(10, 13), p(15, 8)])
+        case .chevronLeft:  ink.poly([p(12.5, 4.5), p(7.5, 10), p(12.5, 15.5)])
+        case .chevronRight: ink.poly([p(7.5, 4.5), p(12.5, 10), p(7.5, 15.5)])
+
+        case .gear:
+            // two sliders rather than a cogwheel: settings here are values to
+            // set, and a cog turns to mush below 16 points
+            ink.line(p(3.4, 7.4), p(16.6, 7.4))
+            ink.line(p(3.4, 12.6), p(16.6, 12.6))
+            ink.circle(p(7.6, 7.4), 2.1)
+            ink.circle(p(12.4, 12.6), 2.1)
+
+        case .mic:
+            ink.rect(NSRect(x: 7.4, y: 2.6, width: 5.2, height: 9), radius: 2.6)
+            ink.arc(p(10, 10.4), 4.6, from: 200, to: 340)
+            ink.line(p(10, 15), p(10, 17.4))
+
+        case .micOff:
+            ink.rect(NSRect(x: 7.4, y: 2.6, width: 5.2, height: 9), radius: 2.6)
+            ink.arc(p(10, 10.4), 4.6, from: 200, to: 340)
+            ink.line(p(10, 15), p(10, 17.4))
+            ink.line(p(3.4, 3.4), p(16.6, 16.6))
+
+        case .camera:
+            ink.rect(NSRect(x: 2.6, y: 5.4, width: 10, height: 9), radius: 2.4)
+            ink.poly([p(13.4, 9), p(17.4, 6.6), p(17.4, 13.4), p(13.4, 11)], close: true)
+
+        case .volume:
+            ink.poly([p(3, 8), p(6, 8), p(9.8, 4.6), p(9.8, 15.4), p(6, 12), p(3, 12)], close: true)
+            ink.arc(p(10.6, 10), 3.6, from: -52, to: 52)
+            ink.arc(p(10.6, 10), 6.4, from: -46, to: 46)
+
+        case .keyboard:
+            ink.rect(NSRect(x: 2.4, y: 5.4, width: 15.2, height: 9.2), radius: 2.4)
+            for x in stride(from: 5.2, through: 11.2, by: 3) { ink.dot(p(x, 9), 0.75) }
+            ink.dot(p(14.4, 9), 0.75)
+            ink.line(p(6.4, 12.4), p(13.6, 12.4))
+
+        case .display:
+            ink.rect(NSRect(x: 2.4, y: 3.6, width: 15.2, height: 10.4), radius: 2.4)
+            ink.line(p(7, 17), p(13, 17))
+            ink.line(p(10, 14), p(10, 17))
+
+        case .area:
+            // a dashed frame: the shape of a drag-out selection
+            for (a, b) in [(p(3, 5), p(3, 15)), (p(17, 5), p(17, 15)),
+                           (p(5, 3), p(15, 3)), (p(5, 17), p(15, 17))] {
+                ink.line(a, b)
+            }
+            ink.dot(p(3, 3), 0.9)
+            ink.dot(p(17, 3), 0.9)
+            ink.dot(p(3, 17), 0.9)
+            ink.dot(p(17, 17), 0.9)
+
+        case .scissors:
+            ink.circle(p(5.4, 14.6), 2.4)
+            ink.circle(p(14.6, 14.6), 2.4)
+            ink.line(p(6.9, 12.7), p(15, 3.4))
+            ink.line(p(13.1, 12.7), p(5, 3.4))
+
+        case .zoom:
+            ink.circle(p(9, 9), 5.4)
+            ink.line(p(13, 13), p(17, 17))
+            ink.line(p(6.6, 9), p(11.4, 9))
+            ink.line(p(9, 6.6), p(9, 11.4))
+
+        case .plus:
+            ink.line(p(10, 4.4), p(10, 15.6))
+            ink.line(p(4.4, 10), p(15.6, 10))
+
+        case .trash:
+            ink.line(p(3.4, 5.6), p(16.6, 5.6))
+            ink.poly([p(5.4, 5.6), p(6.2, 16.4), p(13.8, 16.4), p(14.6, 5.6)])
+            ink.poly([p(7.6, 5.6), p(7.6, 3.6), p(12.4, 3.6), p(12.4, 5.6)])
+
+        case .folder:
+            ink.poly([p(2.8, 15.8), p(2.8, 5), p(8, 5), p(9.6, 7.2), p(17.2, 7.2),
+                      p(17.2, 15.8)], close: true)
+
+        case .download:
+            ink.line(p(10, 3.4), p(10, 12.6))
+            ink.poly([p(6.2, 9), p(10, 12.8), p(13.8, 9)])
+            ink.line(p(4, 16.4), p(16, 16.4))
+
+        case .sidebar:
+            ink.rect(NSRect(x: 2.6, y: 3.6, width: 14.8, height: 12.8), radius: 2.6)
+            ink.line(p(13, 3.6), p(13, 16.4))
+
+        case .expand:
+            ink.poly([p(3.4, 8), p(3.4, 3.4), p(8, 3.4)])
+            ink.poly([p(12, 16.6), p(16.6, 16.6), p(16.6, 12)])
+            ink.line(p(3.4, 3.4), p(8.4, 8.4))
+            ink.line(p(16.6, 16.6), p(11.6, 11.6))
+
+        case .layers:
+            ink.poly([p(10, 2.8), p(17.4, 7), p(10, 11.2), p(2.6, 7)], close: true)
+            ink.poly([p(3.8, 10.6), p(10, 14.2), p(16.2, 10.6)])
+            ink.poly([p(3.8, 13.8), p(10, 17.4), p(16.2, 13.8)])
+
+        case .transcript:
+            ink.rect(NSRect(x: 3.4, y: 2.8, width: 13.2, height: 14.4), radius: 2.4)
+            ink.line(p(6.4, 7), p(13.6, 7))
+            ink.line(p(6.4, 10), p(13.6, 10))
+            ink.line(p(6.4, 13), p(10.6, 13))
+
+        case .bookmark:
+            ink.poly([p(5.2, 2.8), p(14.8, 2.8), p(14.8, 17.2), p(10, 13), p(5.2, 17.2)],
+                     close: true)
+
+        case .undo:
+            // a loop back to the left, with the head where the motion ends
+            ink.arc(p(10.4, 11), 5.4, from: 172, to: 8)
+            // the head sits on the arc's left end, pointing back the way it came
+            ink.poly([p(2.6, 9.4), p(5.1, 12.1), p(7.6, 9.6)])
+
+        case .pointer:
+            ink.poly([p(5, 3), p(15.4, 10.2), p(10.6, 11), p(12.6, 16.2), p(10.2, 17),
+                      p(8.2, 11.9), p(5, 15)], close: true)
+
+        case .arrowTool:
+            ink.line(p(4.6, 15.4), p(15.4, 4.6))
+            ink.poly([p(8.4, 4.6), p(15.4, 4.6), p(15.4, 11.6)])
+
+        case .square:
+            ink.rect(NSRect(x: 3.6, y: 4.6, width: 12.8, height: 10.8), radius: 2.4)
+
+        case .shapes:
+            ink.circle(p(10, 10), 6.2)
+
+        case .textTool:
+            ink.line(p(4.4, 4.6), p(15.6, 4.6))
+            ink.line(p(10, 4.6), p(10, 15.4))
+            ink.line(p(7, 15.4), p(13, 15.4))
+
+        case .highlight:
+            ink.poly([p(4.4, 12.4), p(11.6, 5.2), p(14.8, 8.4), p(7.6, 15.6), p(4.4, 15.6)],
+                     close: true)
+            ink.line(p(11.4, 15.6), p(16.6, 15.6))
+
+        case .droplet:
+            // the blur tool: a drop over a blurred row of squares
+            ink.poly([p(10, 3.2), p(14.6, 9.4)])
+            ink.arc(p(10, 11.4), 4.6, from: -55, to: 235)
+            ink.line(p(10, 3.2), p(5.4, 9.4))
+
+        case .numbered:
+            // a numbered step: the badge Cutaway actually draws, plus its rows
+            ink.circle(p(5.4, 5.6), 2.8)
+            ink.line(p(5.4, 4.2), p(5.4, 7))
+            ink.line(p(10.4, 5.6), p(16.6, 5.6))
+            ink.line(p(3.4, 11.4), p(16.6, 11.4))
+            ink.line(p(3.4, 16), p(13, 16))
+
+        case .image:
+            ink.rect(NSRect(x: 2.8, y: 4, width: 14.4, height: 12), radius: 2.4)
+            ink.poly([p(3.4, 13.4), p(7.6, 9.4), p(11, 12.6), p(13.6, 10.2), p(16.6, 13)])
+            ink.dot(p(7.4, 7.6), 1.1)
+
+        case .ratio:
+            // a wide frame with a narrow one inside: one shape into another
+            ink.rect(NSRect(x: 2.6, y: 4.4, width: 14.8, height: 11.2), radius: 2.4)
+            ink.rect(NSRect(x: 6.4, y: 7.4, width: 7.2, height: 5.2), radius: 1.6)
+
+        case .copy:
+            ink.rect(NSRect(x: 3, y: 3, width: 10.4, height: 10.4), radius: 2.4)
+            ink.poly([p(7, 16.8), p(16.8, 16.8), p(16.8, 7)])
+
+        case .check:
+            ink.poly([p(4, 10.6), p(8.2, 14.8), p(16, 5.6)])
+
+        case .pen:
+            ink.poly([p(3.2, 16.8), p(4.4, 12.8), p(13.4, 3.8), p(16.2, 6.6), p(7.2, 15.6)],
+                     close: true)
+            ink.line(p(11.6, 5.6), p(14.4, 8.4))
+        }
+    }
+
+    /// A template image of the icon, for the few places AppKit wants one.
+    public var image: NSImage? {
+        let size = NSSize(width: Icon.grid, height: Icon.grid)
+        let image = NSImage(size: size, flipped: false) { rect in
+            self.draw(in: rect, color: .black)
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 }

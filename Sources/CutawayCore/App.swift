@@ -113,8 +113,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         setTime(0, 0)
 
-        let transport = NSStackView(views: [back, playButton, timeLabel, forward])
+        speedButton.title = "1×"
+        speedButton.toolTip = "Playback speed"
+        speedButton.onClick = { [weak self, weak speedButton] in
+            guard let self, let speedButton else { return }
+            self.showSpeedMenu(from: speedButton)
+        }
+        let transport = NSStackView(views: [back, playButton, timeLabel, forward, speedButton])
         transport.spacing = 10
+        transport.setCustomSpacing(18, after: forward)
 
         let timelineCard = Surface(Theme.inset, radius: Theme.radiusPanel)
         let timelineHeader = SectionHeader("Timeline", icon: .layers)
@@ -193,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             redoButton.widthAnchor.constraint(equalToConstant: 28),
             redoButton.heightAnchor.constraint(equalToConstant: 28),
 
-            transport.topAnchor.constraint(equalTo: center.topAnchor),
+            transport.topAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: 10),
             transport.centerXAnchor.constraint(equalTo: center.centerXAnchor),
             transport.heightAnchor.constraint(equalToConstant: 32),
 
@@ -203,14 +210,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                  constant: 24),
             statusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
 
-            previewCard.topAnchor.constraint(equalTo: transport.bottomAnchor, constant: 12),
+            previewCard.topAnchor.constraint(equalTo: center.topAnchor),
             previewCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
             previewCard.trailingAnchor.constraint(equalTo: center.trailingAnchor),
 
             emptyNote.centerXAnchor.constraint(equalTo: previewCard.centerXAnchor),
             emptyNote.centerYAnchor.constraint(equalTo: previewCard.centerYAnchor),
 
-            timelineCard.topAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: 12),
+            timelineCard.topAnchor.constraint(equalTo: transport.bottomAnchor, constant: 10),
             timelineCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
             timelineCard.trailingAnchor.constraint(equalTo: center.trailingAnchor),
             timelineHeader.topAnchor.constraint(equalTo: timelineCard.topAnchor, constant: 10),
@@ -680,6 +687,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func showSpeedMenu(from anchor: NSView) {
+        let menu = NSMenu()
+        for rate in [0.5, 0.75, 1.0, 1.5, 2.0] {
+            let item = NSMenuItem(title: rate == 1 ? "1×" : "\(rate.clean)×",
+                                  action: #selector(pickSpeed(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = rate
+            item.state = abs((preview?.rate ?? 1) - rate) < 0.01 ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 6), in: anchor)
+    }
+
+    @objc private func pickSpeed(_ item: NSMenuItem) {
+        guard let rate = item.representedObject as? Double else { return }
+        preview?.rate = rate
+        speedButton.title = item.title
+    }
+
     private func step(_ seconds: Double) {
         guard let p = preview else { return }
         p.pause()
@@ -897,6 +923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var systemLevel = 0.55
     private var cameraOnly = false
     private var exporting = false
+    private let speedButton = FillButton("1×")
     /// Sits over the preview until there is something to preview.
     private let emptyNote = Theme.label("Nothing to play yet.\nRecord a take, or capture your screen with ⌘⇧6.",
                                         .body, color: Theme.textTertiary)

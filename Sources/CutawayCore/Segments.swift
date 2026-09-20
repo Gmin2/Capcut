@@ -205,3 +205,10 @@ public enum AutoCut {
         return kept.isEmpty ? whole : kept
     }
 }
+
+extension Double {
+    /// 1.5 not 1.5000000001, for anything shown to a person.
+    var clean: String {
+        self == rounded() ? String(Int(self)) : String(format: "%.2g", self)
+    }
+}
