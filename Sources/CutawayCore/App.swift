@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var countdown = Countdown()
     private let history = History()
     private let setup = RecordSetupView()
+    private var menuBar: MenuBarItem?
     private var skipCountdown = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -69,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotkey = hk
 
+        MainActor.assumeIsolated { installMenuBarItem() }
         sidebar.reload(selected: recordingDir)
         reload()
         handleTriggers()
@@ -116,8 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let timelineCard = Surface(Theme.inset, radius: Theme.radiusPanel)
         let timelineHeader = SectionHeader("Timeline", icon: .layers)
-        let timelineHint = Theme.label("double-click a lane to add, drag to move",
-                                       .meta, color: Theme.textTertiary)
+        timelineHint.isHidden = true
         for v in [timelineHeader, timelineHint, timelineView] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             timelineCard.addSubview(v)
@@ -127,9 +128,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transcript.translatesAutoresizingMaskIntoConstraints = false
         transcriptCard.addSubview(transcript)
 
+        emptyNote.maximumNumberOfLines = 3
+        emptyNote.alignment = .center
+        emptyNote.lineBreakMode = .byWordWrapping
+        emptyNote.preferredMaxLayoutWidth = 420
         let views: [NSView] = [left, right, leftRule, rightRule, sidebar, inspector,
                                undoButton, redoButton, transport, statusLabel,
-                               previewCard, timelineCard, transcriptCard, setup]
+                               previewCard, timelineCard, transcriptCard, emptyNote, setup]
         for v in views {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -202,6 +207,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             previewCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
             previewCard.trailingAnchor.constraint(equalTo: center.trailingAnchor),
 
+            emptyNote.centerXAnchor.constraint(equalTo: previewCard.centerXAnchor),
+            emptyNote.centerYAnchor.constraint(equalTo: previewCard.centerYAnchor),
+
             timelineCard.topAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: 12),
             timelineCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
             timelineCard.trailingAnchor.constraint(equalTo: center.trailingAnchor),
@@ -240,6 +248,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.playButton.glyph = p.isPlaying ? .pause : .play
             self.sidebar.setPlaying(self.recordingDir, p.isPlaying)
         }
+
+        timelineView.onKey = { [weak self] event in self?.handleEditorKey(event) ?? false }
 
         timelineView.onSeek = { [weak self] sourceT in
             guard let self, let p = self.preview else { return }
@@ -555,6 +565,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func captureArea() { Capture.area() }
     @objc private func captureScreen() { Capture.fullScreen() }
 
+    @MainActor
+    private func installMenuBarItem() {
+        let item = MenuBarItem()
+        item.onCaptureArea = { Capture.area() }
+        item.onCaptureScreen = { Capture.fullScreen() }
+        item.onCaptureScrolling = { Task { @MainActor in Capture.scrolling() } }
+        item.onNewRecording = { [weak self] in
+            guard let self else { return }
+            self.window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            self.showSetup()
+        }
+        item.onStop = { [weak self] in self?.toggleRecord() }
+        item.onPause = { [weak self] in self?.togglePause() }
+        item.onHistory = { Task { @MainActor in CaptureHistory.show() } }
+        item.onSettings = { Task { @MainActor in SettingsWindow.show() } }
+        item.onOpenEditor = { [weak self] in
+            self?.window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        menuBar = item
+    }
+
     @objc private func about() {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1"
         NSApp.orderFrontStandardAboutPanel(options: [
@@ -630,6 +663,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: actions
 
+    /// Keys that work anywhere in the editor window.
+    func handleEditorKey(_ event: NSEvent) -> Bool {
+        guard setup.isHidden else { return false }
+        switch event.charactersIgnoringModifiers ?? "" {
+        case " ":
+            togglePlay()
+            return true
+        case "\u{f702}":                                   // left arrow
+            step(event.modifierFlags.contains(.shift) ? -5 : -1)
+            return true
+        case "\u{f703}":                                   // right arrow
+            step(event.modifierFlags.contains(.shift) ? 5 : 1)
+            return true
+        default: return false
+        }
+    }
+
+    private func step(_ seconds: Double) {
+        guard let p = preview else { return }
+        p.pause()
+        p.seek(to: min(max(p.currentTime + seconds, 0), p.duration))
+    }
+
     @objc private func togglePlay() {
         preview?.togglePlay()
         playButton.glyph = (preview?.isPlaying ?? false) ? .pause : .play
@@ -638,9 +694,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func reload() {
         guard FileManager.default.fileExists(
                 atPath: recordingDir.appendingPathComponent("recording.json").path) else {
+            emptyNote.isHidden = false
+            timelineHint.isHidden = true
+            statusLabel.stringValue = ""
             Log.line("no recording yet, press New Recording or ⌘⇧8")
             return
         }
+        emptyNote.isHidden = true
+        timelineHint.isHidden = false
         guard let m = Manifest.load(from: recordingDir.appendingPathComponent("recording.json"))
         else { return }
 
@@ -835,12 +896,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingTake: URL?
     private var systemLevel = 0.55
     private var cameraOnly = false
+    private var exporting = false
+    /// Sits over the preview until there is something to preview.
+    private let emptyNote = Theme.label("Nothing to play yet.\nRecord a take, or capture your screen with ⌘⇧6.",
+                                        .body, color: Theme.textTertiary)
+    private let timelineHint = Theme.label("double-click a lane to add, drag to move",
+                                           .meta, color: Theme.textTertiary)
 
     private func refreshRecordUI() {
         let r = recorder
         let live = r?.isRecording ?? false
         sidebar.newButton.title = live ? "Stop Recording" : "New Recording"
         setup.setRecording(live, elapsed: r?.elapsed ?? 0, paused: r?.isPaused ?? false)
+        MainActor.assumeIsolated {
+            menuBar?.setRecording(live, elapsed: r?.elapsed ?? 0, paused: r?.isPaused ?? false)
+        }
         if live, let r {
             statusLabel.stringValue = String(format: "%@ %.1fs", r.isPaused ? "paused" : "recording",
                                              r.elapsed)
@@ -874,11 +944,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func exportVideo() {
+        guard !exporting else {
+            Log.line("already exporting")
+            return
+        }
+        exporting = true
+        inspector.setExporting(true)
+        statusLabel.stringValue = "exporting…"
+        let out = URL(fileURLWithPath: base + "/export.mp4")
         Task {
             do {
-                try await Export.run(recordingDir: recordingDir,
-                                     to: URL(fileURLWithPath: base + "/export.mp4"))
-            } catch { Log.line("ERROR: \(error)") }
+                try await Export.run(recordingDir: recordingDir, to: out)
+                await MainActor.run {
+                    self.statusLabel.stringValue = "exported export.mp4"
+                    NSWorkspace.shared.activateFileViewerSelecting([out])
+                }
+            } catch {
+                Log.line("ERROR: \(error)")
+                await MainActor.run { self.statusLabel.stringValue = "export failed" }
+            }
+            await MainActor.run {
+                self.exporting = false
+                self.inspector.setExporting(false)
+            }
         }
     }
 
@@ -949,6 +1037,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autouisnap") {
+            // draws the window itself, so it works without screen recording
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                guard let v = self.window.contentView,
+                      let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return }
+                v.cacheDisplay(in: v.bounds, to: rep)
+                let out = Paths.support.appendingPathComponent("ui.png")
+                try? rep.representation(using: .png, properties: [:])?.write(to: out)
+                Log.line("ui snapshot \(Int(v.bounds.width))x\(Int(v.bounds.height))")
+            }
+        }
+        else if consume("automenubar") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let items = NSStatusBar.system.statusItem(withLength: 0)
+                NSStatusBar.system.removeStatusItem(items)
+                MainActor.assumeIsolated {
+                    Log.line("menubar: \(self.menuBar != nil ? "PASS" : "FAIL") item installed")
+                }
+                Task { @MainActor in
+                    self.menuBar?.setRecording(true, elapsed: 65)
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if let content = try? await SCShareableContent.excludingDesktopWindows(
+                        false, onScreenWindowsOnly: true),
+                       let display = content.displays.first {
+                        let config = SCStreamConfiguration()
+                        config.width = 1200
+                        config.height = 60
+                        config.sourceRect = CGRect(x: 900, y: 0, width: 600, height: 30)
+                        config.showsCursor = false
+                        if let image = try? await SCScreenshotManager.captureImage(
+                            contentFilter: SCContentFilter(display: display, excludingWindows: []),
+                            configuration: config) {
+                            try? Still.write(image, to: URL(fileURLWithPath: base + "/menubar.png"))
+                            Log.line("menubar: strip captured")
+                        }
+                    }
+                    self.menuBar?.setRecording(false)
+                    Log.line("menubar: PASS recording state switches")
+                }
+            }
+        }
         else if consume("autoprefs") {
             Task { @MainActor in
                 let before = CaptureHistory.allShots().count
@@ -1155,26 +1284,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reload()
         }
 
+        // Times are fractions of the take, not seconds: on a long recording a
+        // one second drag is a few pixels wide and every hit test misses.
+        let span = max(tl.duration, 1)
+        func at(_ f: Double) -> Double { span * f }
+        let near = span * 0.03
+
         editProject { p in
-            p.zooms = [Zoom(start: 1.0, end: 2.5, level: 2.0)]
+            p.zooms = [Zoom(start: at(0.19), end: at(0.47), level: 2.0)]
             p.trimStart = 0
             p.trimEnd = nil
         }
 
-        click(4.0, .ruler)
+        click(at(0.75), .ruler)
         let seeked = preview?.sourceTime ?? -1
-        report("seek", abs(seeked - 4.0) < 0.15, String(format: "playhead %.2f", seeked))
+        report("seek", abs(seeked - at(0.75)) < near, String(format: "playhead %.2f", seeked))
 
-        drag(2.5, 3.5, .zoom)
+        drag(at(0.47), at(0.66), .zoom)
         let end = project()?.zooms.first?.end ?? -1
-        report("zoom edge drag", abs(end - 3.5) < 0.15, String(format: "end %.2f", end))
+        report("zoom edge drag", abs(end - at(0.66)) < near, String(format: "end %.2f", end))
 
-        drag(2.0, 2.6, .zoom)
+        drag(at(0.38), at(0.49), .zoom)
         let moved = project()?.zooms.first
-        report("zoom move", abs((moved?.start ?? -1) - 1.6) < 0.15,
+        report("zoom move", abs((moved?.start ?? -1) - at(0.30)) < near,
                String(format: "start %.2f end %.2f", moved?.start ?? -1, moved?.end ?? -1))
 
-        click(4.8, .zoom, clicks: 2)
+        click(at(0.90), .zoom, clicks: 2)
         let added = project()?.zooms.count ?? -1
         report("double-click adds zoom", added == 2, "zooms \(added)")
 
@@ -1184,13 +1319,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let left = project()?.zooms.count ?? -1
         report("option-click deletes zoom", left == 1, "zooms \(left)")
 
-        drag(0.0, 0.8, .wave)
+        drag(0.0, at(0.15), .wave)
         let trim = project()?.trimStart ?? -1
-        report("trim start drag", abs(trim - 0.8) < 0.15, String(format: "trimStart %.2f", trim))
+        report("trim start drag", abs(trim - at(0.15)) < near, String(format: "trimStart %.2f", trim))
 
         undo()
         let undone = project()?.trimStart ?? -1
-        report("undo reverts trim", undone < 0.05, String(format: "trimStart %.2f", undone))
+        report("undo reverts trim", undone < near, String(format: "trimStart %.2f", undone))
     }
 
     /// A picture with known words in it, to check the reader against.

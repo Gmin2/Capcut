@@ -42,7 +42,11 @@ public final class TimelineView: ThemedView {
 
     public override var acceptsFirstResponder: Bool { true }
 
+    /// Keys the window wants first: play, step, and so on.
+    public var onKey: ((NSEvent) -> Bool)?
+
     public override func keyDown(with event: NSEvent) {
+        if onKey?(event) == true { return }
         switch event.keyCode {
         case 126: onNudgeZoomLevel?(0.1)
         case 125: onNudgeZoomLevel?(-0.1)

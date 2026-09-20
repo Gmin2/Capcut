@@ -4,6 +4,14 @@ import AppKit
 /// the settings. Every control writes back through the same save path the
 /// timeline uses.
 public final class InspectorView: ThemedView {
+    private let exportButton = FillButton("Export", icon: .download)
+
+    /// Greyed out while a render runs, so it cannot be started twice.
+    public func setExporting(_ busy: Bool) {
+        exportButton.isEnabled = !busy
+        exportButton.title = busy ? "Exporting…" : "Export"
+    }
+
 
     public var apply: ((@escaping (inout Project) -> Void) -> Void)?
     public var onSeek: ((Double) -> Void)?
@@ -21,7 +29,7 @@ public final class InspectorView: ThemedView {
             guard let gear, let self else { return }
             self.showAppearanceMenu(from: gear)
         }
-        let export = FillButton("Export", icon: .download)
+        let export = exportButton
         export.onClick = { [weak self] in self?.onExport?() }
 
         let scroll = NSScrollView()

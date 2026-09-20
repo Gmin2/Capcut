@@ -31,7 +31,12 @@ public final class RecordingsSidebar: ThemedView {
         list.spacing = 8
         list.alignment = .leading
 
-        for v in [back, title, group, countChip, newButton, scroll] as [NSView] {
+        emptyNote.maximumNumberOfLines = 3
+        emptyNote.alignment = .center
+        // Theme.label truncates by default, which eats the second line
+        emptyNote.lineBreakMode = .byWordWrapping
+        emptyNote.preferredMaxLayoutWidth = 200
+        for v in [back, title, group, countChip, newButton, scroll, emptyNote] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -55,6 +60,10 @@ public final class RecordingsSidebar: ThemedView {
             newButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             newButton.heightAnchor.constraint(equalToConstant: 30),
 
+            emptyNote.topAnchor.constraint(equalTo: newButton.bottomAnchor, constant: 40),
+            emptyNote.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            emptyNote.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+
             scroll.topAnchor.constraint(equalTo: newButton.bottomAnchor, constant: 12),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -67,6 +76,11 @@ public final class RecordingsSidebar: ThemedView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Shown instead of the list on a first run, since an empty sidebar
+    /// looks broken rather than new.
+    private let emptyNote = Theme.label("No takes yet.\nPress New Recording to make one.",
+                                        .body, color: Theme.textTertiary)
 
     public func reload(selected: URL) {
         cards.forEach { list.removeArrangedSubview($0); $0.removeFromSuperview() }
@@ -82,6 +96,7 @@ public final class RecordingsSidebar: ThemedView {
             card.heightAnchor.constraint(equalToConstant: 104).isActive = true
         }
         countChip.text = "\(cards.count)"
+        emptyNote.isHidden = !cards.isEmpty
         setSelected(selected)
     }
 
