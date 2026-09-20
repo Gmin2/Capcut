@@ -115,6 +115,45 @@ public enum Capture {
         Shelf.shared.show(url: url, image: image)
     }
 
+    /// Captures the same area over and over while you scroll, then joins the
+    /// frames into one tall picture. Manual scrolling on purpose: sending
+    /// scroll events would need Accessibility, and pages that hijack the wheel
+    /// would fight it anyway.
+    @MainActor
+    public static func scrolling() {
+        Task { @MainActor in
+            guard case .area(let rect, let display)? = await SelectionOverlay.pick() else { return }
+            await ScrollingSession(display: display, region: rect).run()
+        }
+    }
+
+    /// Desktop icons off makes a capture of the desktop look deliberate.
+    /// Finder has to be restarted for it either way, which it survives.
+    public static var desktopIconsHidden: Bool {
+        get { UserDefaults.standard.bool(forKey: "capture.hideIcons") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "capture.hideIcons")
+            setFinderDesktop(visible: !newValue)
+        }
+    }
+
+    private static func setFinderDesktop(visible: Bool) {
+        let write = Process()
+        write.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        write.arguments = ["write", "com.apple.finder", "CreateDesktop", visible ? "true" : "false"]
+        let restart = Process()
+        restart.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        restart.arguments = ["Finder"]
+        do {
+            try write.run()
+            write.waitUntilExit()
+            try restart.run()
+            Log.line("desktop icons \(visible ? "shown" : "hidden"), Finder restarted")
+        } catch {
+            Log.line("ERROR: could not change the desktop, \(error.localizedDescription)")
+        }
+    }
+
     /// Newest shot on disk, for "markup the last one".
     public static func lastShot() -> URL? {
         let fm = FileManager.default
@@ -568,4 +607,102 @@ private final class ThumbView: Control {
         super.mouseUp(with: event)
         if bounds.contains(convert(event.locationInWindow, from: nil)) { shelf?.annotate() }
     }
+}
+
+// MARK: - scrolling capture
+
+/// Runs while you scroll: a small panel with a Done button, and a frame of the
+/// chosen area four times a second.
+@MainActor
+final class ScrollingSession {
+    private let display: CGDirectDisplayID
+    private let region: CGRect
+    private var frames: [CGImage] = []
+    private var panel: NSPanel?
+    private var stopped = false
+    private var busy = false
+
+    init(display: CGDirectDisplayID, region: CGRect) {
+        self.display = display
+        self.region = region
+    }
+
+    func run() async {
+        showPanel()
+        let started = Date()
+        while !stopped, Date().timeIntervalSince(started) < 120 {
+            await grab()
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        panel?.orderOut(nil)
+        panel = nil
+
+        guard frames.count > 1, let tall = Stitch.vertical(frames) else {
+            Log.line("scrolling capture: nothing to join")
+            if let one = frames.first { Capture.finish(one) }
+            return
+        }
+        Log.line("scrolling capture: \(frames.count) frames -> \(tall.width)x\(tall.height)")
+        Capture.finish(tall)
+    }
+
+    /// Frames are dropped if one is still in flight, so a slow capture cannot
+    /// build a backlog of stale pictures.
+    private func grab() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: true),
+              let screen = content.displays.first(where: { $0.displayID == display }) else { return }
+        let mine = content.windows.filter { $0.owningApplication?.processID == getpid() }
+        let scale = NSScreen.screens.first {
+            ($0.deviceDescription[.init("NSScreenNumber")] as? CGDirectDisplayID) == display
+        }?.backingScaleFactor ?? 2
+
+        let config = SCStreamConfiguration()
+        config.width = Int(region.width * scale)
+        config.height = Int(region.height * scale)
+        config.showsCursor = false
+        config.sourceRect = region
+        if let image = try? await SCScreenshotManager.captureImage(
+            contentFilter: SCContentFilter(display: screen, excludingWindows: mine),
+            configuration: config) {
+            frames.append(image)
+        }
+    }
+
+    private func showPanel() {
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 66),
+                        styleMask: [.borderless, .nonactivatingPanel],
+                        backing: .buffered, defer: false)
+        p.level = .floating
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+
+        let root = Surface(NSColor(white: 0.1, alpha: 0.92), radius: 14)
+        let label = Theme.label("Scroll the page", .body, color: .white)
+        let done = FillButton("Done") { [weak self] in self?.stopped = true }
+        for v in [label, done] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            label.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            done.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            done.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            done.heightAnchor.constraint(equalToConstant: 30),
+        ])
+        p.contentView = root
+        if let screen = NSScreen.main {
+            p.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - 150,
+                                     y: screen.visibleFrame.minY + 40))
+        }
+        p.orderFrontRegardless()
+        panel = p
+    }
+
+    func stop() { stopped = true }
 }

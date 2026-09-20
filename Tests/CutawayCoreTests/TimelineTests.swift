@@ -508,3 +508,58 @@ final class FrameTests: XCTestCase {
         XCTAssertEqual(b.width, b.height, accuracy: 0.001)
     }
 }
+
+final class StitchTests: XCTestCase {
+
+    /// A tall page, sliced into overlapping screenfuls the way scrolling gives
+    /// them, has to come back as the same page.
+    private func page(height: Int, width: Int = 400) -> CGImage {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        // rows of text-like bars, never repeating, so every row is telling apart
+        for i in 0..<(height / 20) {
+            NSColor(white: Double(i % 17) / 20.0, alpha: 1).setFill()
+            NSRect(x: 20, y: i * 20 + 4, width: 40 + (i * 37) % 320, height: 10).fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.cgImage!
+    }
+
+    private func slice(_ image: CGImage, top: Int, height: Int) -> CGImage {
+        image.cropping(to: CGRect(x: 0, y: top, width: image.width, height: height))!
+    }
+
+    func testOverlapFindsHowFarThePageScrolled() {
+        let tall = page(height: 1200)
+        let first = slice(tall, top: 0, height: 400)
+        let second = slice(tall, top: 260, height: 400)   // scrolled 260 rows
+        let repeated = Stitch.overlap(first, second)
+        XCTAssertNotNil(repeated)
+        XCTAssertEqual(repeated ?? 0, 140, accuracy: 2, "400 - 260 rows are the same")
+    }
+
+    func testFramesJoinBackIntoTheWholePage() {
+        let tall = page(height: 1200)
+        let frames = [slice(tall, top: 0, height: 400),
+                      slice(tall, top: 300, height: 400),
+                      slice(tall, top: 600, height: 400),
+                      slice(tall, top: 800, height: 400)]
+        let joined = Stitch.vertical(frames)
+        XCTAssertNotNil(joined)
+        XCTAssertEqual(joined?.width, 400)
+        XCTAssertEqual(Double(joined?.height ?? 0), 1200, accuracy: 4)
+    }
+
+    func testAStillPageAddsNothing() {
+        let tall = page(height: 800)
+        let same = slice(tall, top: 0, height: 400)
+        let joined = Stitch.vertical([same, same, same])
+        XCTAssertEqual(joined?.height, 400, "nothing moved, so there is nothing to add")
+    }
+}

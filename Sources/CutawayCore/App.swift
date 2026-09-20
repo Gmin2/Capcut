@@ -445,6 +445,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screenItem.keyEquivalentModifierMask = [.command, .shift]
         capture.addItem(areaItem)
         capture.addItem(screenItem)
+        let scrollItem = NSMenuItem(title: "Scrolling Capture", action: #selector(captureScrolling),
+                                    keyEquivalent: "5")
+        scrollItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(scrollItem)
+
+        let iconsItem = NSMenuItem(title: "Hide Desktop Icons", action: #selector(toggleIcons),
+                                   keyEquivalent: "")
+        iconsItem.state = Capture.desktopIconsHidden ? .on : .off
+        capture.addItem(iconsItem)
+
         let timerItem = NSMenuItem(title: "Self Timer", action: nil, keyEquivalent: "")
         let timerMenu = NSMenu()
         for seconds in [0, 3, 5, 10] {
@@ -498,6 +508,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func captureArea() { Capture.area() }
     @objc private func captureScreen() { Capture.fullScreen() }
+
+    @objc private func captureScrolling() {
+        Task { @MainActor in Capture.scrolling() }
+    }
+
+    @objc private func toggleIcons(_ item: NSMenuItem) {
+        Capture.desktopIconsHidden.toggle()
+        item.state = Capture.desktopIconsHidden ? .on : .off
+    }
 
     @objc private func pickTimer(_ item: NSMenuItem) {
         Capture.timer = item.tag
@@ -860,6 +879,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autoscroll") {
+            Task { @MainActor in
+                let session = ScrollingSession(display: CGMainDisplayID(),
+                                               region: CGRect(x: 100, y: 100, width: 600, height: 400))
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    session.stop()
+                }
+                await session.run()
+            }
+        }
         else if consume("autohistory") {
             Task { @MainActor in
                 CaptureHistory.show()
