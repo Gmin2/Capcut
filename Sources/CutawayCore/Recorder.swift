@@ -118,7 +118,8 @@ public final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = showCursorForVerification
         config.queueDepth = 8
-        config.capturesAudio = captureSystemAudio
+        // the mic only delivers samples when the stream captures audio at all
+        config.capturesAudio = captureSystemAudio || captureMicrophone
         config.captureMicrophone = captureMicrophone
 
         let filter = Recorder.makeFilter(display: display, content: content,
