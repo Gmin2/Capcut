@@ -489,8 +489,25 @@ final class AnnotateCanvas: ThemedView {
         draft = Mark(tool: tool, from: p, to: p, color: color, width: width)
     }
 
+    /// Shift makes a box square, an ellipse round and an arrow snap to
+    /// eighths of a turn, the way every drawing tool behaves.
+    private func constrain(_ from: CGPoint, _ to: CGPoint, tool: Tool) -> CGPoint {
+        let dx = to.x - from.x, dy = to.y - from.y
+        if tool == .arrow {
+            let step = CGFloat.pi / 4
+            let angle = (atan2(dy, dx) / step).rounded() * step
+            let length = hypot(dx, dy)
+            return CGPoint(x: from.x + cos(angle) * length, y: from.y + sin(angle) * length)
+        }
+        let side = max(abs(dx), abs(dy))
+        return CGPoint(x: from.x + (dx < 0 ? -side : side), y: from.y + (dy < 0 ? -side : side))
+    }
+
     override func mouseDragged(with event: NSEvent) {
-        let p = imagePoint(convert(event.locationInWindow, from: nil))
+        var p = imagePoint(convert(event.locationInWindow, from: nil))
+        if event.modifierFlags.contains(.shift), let d = draft {
+            p = constrain(d.from, p, tool: d.tool)
+        }
         if isCropping, let start = cropStart {
             cropping = CGRect(x: min(start.x, p.x), y: min(start.y, p.y),
                               width: abs(p.x - start.x), height: abs(p.y - start.y))
@@ -512,7 +529,11 @@ final class AnnotateCanvas: ThemedView {
     override func mouseUp(with event: NSEvent) {
         dragStart = nil
         dragOrigin = nil
-        guard let d = draft else { return }
+        guard var d = draft else { return }
+        if event.modifierFlags.contains(.shift) {
+            d.to = constrain(d.from, imagePoint(convert(event.locationInWindow, from: nil)), tool: d.tool)
+            draft = d
+        }
         draft = nil
         // a stray click with a drag tool should not leave an invisible mark
         let size = max(abs(d.to.x - d.from.x), abs(d.to.y - d.from.y))

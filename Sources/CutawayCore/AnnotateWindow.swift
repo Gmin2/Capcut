@@ -126,10 +126,12 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
         undo.toolTip = "Undo"
         let copy = FillButton("Copy") { [weak self] in self?.copyToClipboard() }
         let save = FillButton("Save", icon: .download) { [weak self] in self?.saveToDisk() }
+        let done = FillButton("Done") { [weak self] in self?.finishUp() }
+        done.toolTip = "Save and close"
 
         let row = NSStackView(views: [tools, Divider.vertical(), colorButton, widthButton,
                                       cropButton, frameButton, Divider.vertical(),
-                                      undo, copy, save])
+                                      undo, copy, save, done])
         row.spacing = 10
         row.alignment = .centerY
         // the pill is as wide as its buttons, never the window
@@ -159,6 +161,7 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
             undo.heightAnchor.constraint(equalToConstant: 30),
             copy.heightAnchor.constraint(equalToConstant: 30),
             save.heightAnchor.constraint(equalToConstant: 30),
+            done.heightAnchor.constraint(equalToConstant: 30),
             colorButton.widthAnchor.constraint(equalToConstant: 30),
             colorButton.heightAnchor.constraint(equalToConstant: 30),
             widthButton.heightAnchor.constraint(equalToConstant: 30),
@@ -474,6 +477,21 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
         report("select and move", picked != nil && movedX - startX > 30,
                String(format: "x %.0f -> %.0f", startX, movedX))
 
+        // shift constrains: a box dragged wide comes out square
+        pick(.box)
+        canvas.mouseDown(with: event(.leftMouseDown, CGPoint(x: 700, y: 620)))
+        let shifted = NSEvent.mouseEvent(
+            with: .leftMouseDragged, location: canvas.convert(view(CGPoint(x: 1000, y: 700)), to: nil),
+            modifierFlags: [.shift], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        canvas.mouseDragged(with: shifted)
+        canvas.mouseUp(with: shifted)
+        let square = canvas.marks.last
+        report("shift draws a square",
+               square.map { abs($0.rect.width - $0.rect.height) < 2 } ?? false,
+               String(format: "%.0f x %.0f", square?.rect.width ?? 0, square?.rect.height ?? 0))
+        undo()
+
         // crop: keep the middle, and every mark must move with it
         let beforeCrop = canvas.imageSize
         let markBefore = canvas.marks[0].from
@@ -514,6 +532,11 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
         } catch {
             report("export", false, error.localizedDescription)
         }
+    }
+
+    private func finishUp() {
+        saveToDisk()
+        window.performClose(nil)
     }
 
     public func windowWillClose(_ notification: Notification) {

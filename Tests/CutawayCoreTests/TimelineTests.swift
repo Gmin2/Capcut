@@ -563,3 +563,23 @@ final class StitchTests: XCTestCase {
         XCTAssertEqual(joined?.height, 400, "nothing moved, so there is nothing to add")
     }
 }
+
+final class ShotNamingTests: XCTestCase {
+
+    /// Two captures in the same second used to land on the same name, and the
+    /// second one quietly replaced the first.
+    func testASecondCaptureInTheSameSecondGetsItsOwnName() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cutaway-shots-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        setenv("CUTAWAY_SHOTS", dir.path, 1)
+        defer { unsetenv("CUTAWAY_SHOTS") }
+
+        let first = Paths.newShot()
+        try Data("x".utf8).write(to: first)
+        let second = Paths.newShot()
+        XCTAssertNotEqual(first, second)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
+    }
+}

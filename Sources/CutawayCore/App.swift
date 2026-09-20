@@ -63,6 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hk.register(.pause) { [weak self] in self?.togglePause() }
         hk.register(.captureArea) { Capture.area() }
         hk.register(.captureScreen) { Capture.fullScreen() }
+        hk.register(.captureRepeat) { [weak self] in
+            _ = self
+            Task { @MainActor in Capture.repeatLast() }
+        }
         hotkey = hk
 
         sidebar.reload(selected: recordingDir)
@@ -406,6 +410,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func undo() {
+        if let text = window.firstResponder as? NSText, text.undoManager?.canUndo == true {
+            text.undoManager?.undo()
+            return
+        }
         guard let current = Project.load(from: recordingDir),
               let previous = history.undo(current: current) else { return }
         history.replay { try? previous.write(to: recordingDir) }
@@ -430,8 +438,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About Cutaway", action: #selector(about), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings),
+                                  keyEquivalent: ",")
+        appMenu.addItem(settings)
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide Cutaway", action: #selector(NSApp.hide(_:)),
+                        keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit Cutaway", action: #selector(NSApp.terminate(_:)),
                         keyEquivalent: "q")
+        appMenu.items.forEach { if $0.action != #selector(NSApp.hide(_:))
+                                && $0.action != #selector(NSApp.terminate(_:)) { $0.target = self } }
         appItem.submenu = appMenu
         main.addItem(appItem)
 
@@ -445,6 +463,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screenItem.keyEquivalentModifierMask = [.command, .shift]
         capture.addItem(areaItem)
         capture.addItem(screenItem)
+        let repeatItem = NSMenuItem(title: "Capture Same Area Again", action: #selector(captureAgain),
+                                    keyEquivalent: "r")
+        repeatItem.keyEquivalentModifierMask = [.command, .shift]
+        capture.addItem(repeatItem)
+
         let scrollItem = NSMenuItem(title: "Scrolling Capture", action: #selector(captureScrolling),
                                     keyEquivalent: "5")
         scrollItem.keyEquivalentModifierMask = [.command, .shift]
@@ -494,20 +517,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "Edit")
-        edit.addItem(withTitle: "Undo", action: #selector(undo), keyEquivalent: "z")
-        let redoItem = NSMenuItem(title: "Redo", action: #selector(redo),
-                                  keyEquivalent: "z")
+        let undoItem = NSMenuItem(title: "Undo", action: #selector(undo), keyEquivalent: "z")
+        undoItem.target = self
+        edit.addItem(undoItem)
+        let redoItem = NSMenuItem(title: "Redo", action: #selector(redo), keyEquivalent: "z")
         redoItem.keyEquivalentModifierMask = [.command, .shift]
+        redoItem.target = self
         edit.addItem(redoItem)
-        edit.items.forEach { $0.target = self }
+        edit.addItem(.separator())
+        // no target: these walk the responder chain, which is what makes
+        // ⌘V work in the prompter and in a text mark
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
         main.addItem(editItem)
+
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimise", action: #selector(NSWindow.miniaturize(_:)),
+                           keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)),
+                           keyEquivalent: "w")
+        windowMenu.addItem(.separator())
+        let pinsItem = NSMenuItem(title: "Close All Pins", action: #selector(closePins),
+                                  keyEquivalent: "")
+        pinsItem.target = self
+        windowMenu.addItem(pinsItem)
+        windowItem.submenu = windowMenu
+        main.addItem(windowItem)
+        NSApp.windowsMenu = windowMenu
 
         NSApp.mainMenu = main
     }
 
     @objc private func captureArea() { Capture.area() }
     @objc private func captureScreen() { Capture.fullScreen() }
+
+    @objc private func about() {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1"
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "Cutaway",
+            .applicationVersion: version,
+            .credits: NSAttributedString(
+                string: "Record a demo, mark up a capture, ship the video.",
+                attributes: [.font: Theme.Text.body.font, .foregroundColor: Theme.textSecondary]),
+        ])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func showSettings() {
+        Task { @MainActor in SettingsWindow.show() }
+    }
+
+    @objc private func closePins() {
+        Task { @MainActor in Pin.closeAll() }
+    }
+
+    @objc private func captureAgain() {
+        Task { @MainActor in Capture.repeatLast() }
+    }
 
     @objc private func captureScrolling() {
         Task { @MainActor in Capture.scrolling() }
@@ -879,6 +949,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autoprefs") {
+            Task { @MainActor in
+                let before = CaptureHistory.allShots().count
+                let region = CGRect(x: 150, y: 120, width: 420, height: 260)
+
+                Prefs.afterCapture = .shelf
+                await Capture.shoot(display: CGMainDisplayID(), region: region)
+                let afterOne = CaptureHistory.allShots().count
+                Log.line("prefs: \(afterOne == before + 1 ? "PASS" : "FAIL") a capture is saved")
+
+                Capture.repeatLast()
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                let afterRepeat = CaptureHistory.allShots().count
+                Log.line("prefs: \(afterRepeat == afterOne + 1 ? "PASS" : "FAIL") repeat takes it again")
+
+                Prefs.format = .jpeg
+                await Capture.shoot(display: CGMainDisplayID(), region: region)
+                let jpeg = CaptureHistory.allShots().count == afterRepeat
+                    && (try? FileManager.default.contentsOfDirectory(atPath: Paths.shotsRoot.path))?
+                        .contains(where: { $0.hasSuffix(".jpg") }) == true
+                Log.line("prefs: \(jpeg ? "PASS" : "FAIL") jpeg is written as jpg")
+                Prefs.format = .png
+
+                Prefs.afterCapture = .copyOnly
+                let countBefore = CaptureHistory.allShots().count
+                await Capture.shoot(display: CGMainDisplayID(), region: region)
+                Log.line("prefs: \(CaptureHistory.allShots().count == countBefore ? "PASS" : "FAIL") "
+                         + "copy only writes no file")
+                Prefs.afterCapture = .shelf
+            }
+        }
+        else if consume("autosettings") {
+            Task { @MainActor in
+                SettingsWindow.show()
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                Log.line("settings: \(SettingsWindow.isOpen ? "PASS" : "FAIL") open")
+                try? await Snapshot.captureWindow(
+                    bundleID: Bundle.main.bundleIdentifier ?? "com.mintu.cutaway",
+                    titled: "Settings", to: URL(fileURLWithPath: base + "/settings.png"))
+            }
+        }
         else if consume("autoscroll") {
             Task { @MainActor in
                 let session = ScrollingSession(display: CGMainDisplayID(),
