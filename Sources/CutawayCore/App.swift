@@ -1,5 +1,6 @@
 import AppKit
 import ScreenCaptureKit
+import Carbon.HIToolbox
 import Foundation
 import AVFoundation
 
@@ -60,15 +61,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Registered first so a take can start and stop without this window in shot.
         let hk = Hotkey()
-        hk.register(.record) { [weak self] in self?.toggleRecord() }
-        hk.register(.pause) { [weak self] in self?.togglePause() }
-        hk.register(.captureArea) { Capture.area() }
-        hk.register(.captureScreen) { Capture.fullScreen() }
-        hk.register(.captureRepeat) { [weak self] in
-            _ = self
-            Task { @MainActor in Capture.repeatLast() }
-        }
         hotkey = hk
+        bindHotkeys()
+        SettingsWindow.onShortcutChange = { [weak self] in
+            Task { @MainActor in self?.bindHotkeys() }
+        }
 
         MainActor.assumeIsolated {
             installMenuBarItem()
@@ -689,6 +686,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Called at launch and whenever a shortcut is changed in Settings.
+    func bindHotkeys() {
+        hotkey?.rebind([
+            .record: { [weak self] in self?.toggleRecord() },
+            .pause: { [weak self] in self?.togglePause() },
+            .captureArea: { Capture.area() },
+            .captureScreen: { Capture.fullScreen() },
+            .captureRepeat: { Task { @MainActor in Capture.repeatLast() } },
+            .captureScrolling: { Task { @MainActor in Capture.scrolling() } },
+        ])
+    }
+
     @objc private func showWelcome() {
         Task { @MainActor in Welcome.show() }
     }
@@ -1156,6 +1165,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
         else if consume("autoexport") { exportVideo() }
+        else if consume("autoshortcuts") {
+            Task { @MainActor in
+                func report(_ name: String, _ ok: Bool, _ detail: String) {
+                    Log.line("shortcuts: \(ok ? "PASS" : "FAIL") \(name) \(detail)")
+                }
+                let action = Hotkey.Action.captureArea
+                action.set(nil)
+                report("default is used", action.combo.label == "⌘⇧6", action.combo.label)
+
+                let pressed = NSEvent.keyEvent(with: .keyDown, location: .zero,
+                                               modifierFlags: [.control, .option],
+                                               timestamp: 0, windowNumber: 0, context: nil,
+                                               characters: "a", charactersIgnoringModifiers: "a",
+                                               isARepeat: false, keyCode: UInt16(kVK_ANSI_A))!
+                guard let combo = Hotkey.Combo(event: pressed) else {
+                    report("a press becomes a shortcut", false, "not read")
+                    return
+                }
+                report("a press becomes a shortcut", combo.label == "⌃⌥A", combo.label)
+                action.set(combo)
+                report("it is remembered", Hotkey.Action.captureArea.combo.label == "⌃⌥A",
+                       Hotkey.Action.captureArea.combo.label)
+
+                self.bindHotkeys()
+                report("rebinding works", true, "registered")
+
+                let bare = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                            timestamp: 0, windowNumber: 0, context: nil,
+                                            characters: "a", charactersIgnoringModifiers: "a",
+                                            isARepeat: false, keyCode: UInt16(kVK_ANSI_A))!
+                report("a bare key is refused", Hotkey.Combo(event: bare) == nil, "no modifier")
+
+                action.set(nil)
+                report("esc restores the default", Hotkey.Action.captureArea.combo.label == "⌘⇧6",
+                       Hotkey.Action.captureArea.combo.label)
+                self.bindHotkeys()
+
+                SettingsWindow.show()
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                if let v = NSApp.windows.first(where: { $0.title == "Settings" })?.contentView,
+                   let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                    v.cacheDisplay(in: v.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?
+                        .write(to: Paths.support.appendingPathComponent("settings.png"))
+                }
+            }
+        }
         else if consume("autowelcome") {
             Task { @MainActor in
                 UserDefaults.standard.set(false, forKey: "welcome.done")
