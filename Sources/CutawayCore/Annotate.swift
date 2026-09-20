@@ -302,6 +302,9 @@ final class AnnotateCanvas: ThemedView {
     var color = NSColor.systemRed
     var width: CGFloat = 4
     var dressing = Frame() { didSet { needsDisplay = true } }
+    /// Set while the crop tool is up: the part being kept, in image pixels.
+    var cropping: CGRect? { didSet { needsDisplay = true } }
+    var isCropping = false { didSet { cropping = nil; needsDisplay = true } }
 
     var onCommit: ((Mark) -> Void)?
     var onChange: (([Mark], Int?) -> Void)?
@@ -309,6 +312,7 @@ final class AnnotateCanvas: ThemedView {
     var onKey: ((NSEvent) -> Bool)?
 
     private var draft: Mark?
+    private var cropStart: CGPoint?
     private var dragStart: CGPoint?
     private var dragOrigin: (from: CGPoint, to: CGPoint)?
     private var pixelated: CGImage?
@@ -353,6 +357,67 @@ final class AnnotateCanvas: ThemedView {
         let all = draft.map { marks + [$0] } ?? marks
         MarkRenderer.draw(all, selected: selected, pixelated: pixelatedImage(),
                           imageSize: imageSize, in: imageRect)
+        if isCropping { drawCrop() }
+    }
+
+    private func drawCrop() {
+        let r = imageRect
+        let keep = cropping.map { viewRect($0) } ?? r
+        let shade = NSBezierPath(rect: r)
+        shade.append(NSBezierPath(rect: keep))
+        shade.windingRule = .evenOdd
+        NSColor.black.withAlphaComponent(0.45).setFill()
+        shade.fill()
+
+        let outline = NSBezierPath(rect: keep)
+        outline.lineWidth = 1.5
+        Theme.accent.setStroke()
+        outline.stroke()
+        for p in [NSPoint(x: keep.minX, y: keep.minY), NSPoint(x: keep.maxX, y: keep.minY),
+                  NSPoint(x: keep.minX, y: keep.maxY), NSPoint(x: keep.maxX, y: keep.maxY)] {
+            let box = NSRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)
+            NSColor.white.setFill()
+            NSBezierPath(rect: box).fill()
+            Theme.accent.setStroke()
+            NSBezierPath(rect: box).stroke()
+        }
+
+        let size = cropping ?? CGRect(origin: .zero, size: imageSize)
+        let label = "\(Int(size.width)) × \(Int(size.height))  ⏎ to crop" as NSString
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: NSColor.white]
+        let s = label.size(withAttributes: attrs)
+        let pill = NSRect(x: keep.midX - s.width / 2 - 8, y: keep.minY - s.height - 14,
+                          width: s.width + 16, height: s.height + 8)
+        NSColor.black.withAlphaComponent(0.7).setFill()
+        NSBezierPath(roundedRect: pill, xRadius: 5, yRadius: 5).fill()
+        label.draw(at: NSPoint(x: pill.minX + 8, y: pill.minY + 4), withAttributes: attrs)
+    }
+
+    /// Image pixels -> view points, the other way round from imagePoint.
+    func viewRect(_ r: CGRect) -> NSRect {
+        let box = imageRect
+        let s = box.width / imageSize.width
+        return NSRect(x: box.minX + r.minX * s, y: box.maxY - (r.minY + r.height) * s,
+                      width: r.width * s, height: r.height * s)
+    }
+
+    /// Keeps the chosen part and moves every mark with it.
+    func applyCrop() -> Bool {
+        guard let image, var keep = cropping else { return false }
+        keep = keep.integral.intersection(CGRect(origin: .zero, size: imageSize))
+        guard keep.width > 16, keep.height > 16, let cut = image.cropping(to: keep) else { return false }
+        self.image = cut
+        marks = marks.map {
+            var m = $0
+            m.from = CGPoint(x: m.from.x - keep.minX, y: m.from.y - keep.minY)
+            m.to = CGPoint(x: m.to.x - keep.minX, y: m.to.y - keep.minY)
+            return m
+        }
+        isCropping = false
+        selected = nil
+        return true
     }
 
     private func drawDots() {
@@ -398,6 +463,12 @@ final class AnnotateCanvas: ThemedView {
         window?.makeFirstResponder(self)
         let p = imagePoint(convert(event.locationInWindow, from: nil))
 
+        if isCropping {
+            cropStart = p
+            cropping = CGRect(origin: p, size: .zero)
+            return
+        }
+
         if tool == .select {
             selected = hit(p)
             if let i = selected {
@@ -420,6 +491,11 @@ final class AnnotateCanvas: ThemedView {
 
     override func mouseDragged(with event: NSEvent) {
         let p = imagePoint(convert(event.locationInWindow, from: nil))
+        if isCropping, let start = cropStart {
+            cropping = CGRect(x: min(start.x, p.x), y: min(start.y, p.y),
+                              width: abs(p.x - start.x), height: abs(p.y - start.y))
+            return
+        }
         if var d = draft {
             d.to = p
             draft = d

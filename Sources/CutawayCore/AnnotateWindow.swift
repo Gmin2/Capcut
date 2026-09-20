@@ -111,6 +111,10 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
             self.toggleWidthMenu(from: widthButton)
         }
 
+        let cropButton = IconButton(.expand, transparent: false)
+        cropButton.toolTip = "Crop"
+        cropButton.onClick = { [weak self] in self?.toggleCrop() }
+
         let frameButton = IconButton(.image, transparent: false)
         frameButton.toolTip = "Background and padding"
         frameButton.onClick = { [weak self, weak frameButton] in
@@ -124,7 +128,8 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
         let save = FillButton("Save", icon: .download) { [weak self] in self?.saveToDisk() }
 
         let row = NSStackView(views: [tools, Divider.vertical(), colorButton, widthButton,
-                                      frameButton, Divider.vertical(), undo, copy, save])
+                                      cropButton, frameButton, Divider.vertical(),
+                                      undo, copy, save])
         row.spacing = 10
         row.alignment = .centerY
         // the pill is as wide as its buttons, never the window
@@ -157,6 +162,8 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
             colorButton.widthAnchor.constraint(equalToConstant: 30),
             colorButton.heightAnchor.constraint(equalToConstant: 30),
             widthButton.heightAnchor.constraint(equalToConstant: 30),
+            cropButton.widthAnchor.constraint(equalToConstant: 30),
+            cropButton.heightAnchor.constraint(equalToConstant: 30),
             frameButton.widthAnchor.constraint(equalToConstant: 30),
             frameButton.heightAnchor.constraint(equalToConstant: 30),
         ])
@@ -185,6 +192,17 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
             self.closePopover()
         }
         showPopover(content, from: anchor)
+    }
+
+    private func toggleCrop() {
+        canvas.isCropping.toggle()
+        if canvas.isCropping { pick(.select) }
+        closePopover()
+    }
+
+    private func applyCrop() {
+        record()
+        if !canvas.applyCrop() { past.removeLast() }
     }
 
     private func toggleFramePopover(from anchor: NSView) {
@@ -353,7 +371,12 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
         case "c" where command: copyToClipboard(); return true
         case "s" where command: saveToDisk(); return true
         case "\u{7f}", "\u{8}": deleteSelected(); return true
-        case "\u{1b}": canvas.selected = nil; closePopover(); return true
+        case "\r": if canvas.isCropping { applyCrop(); return true }; return false
+        case "\u{1b}":
+            canvas.isCropping = false
+            canvas.selected = nil
+            closePopover()
+            return true
         default: break
         }
         // 1...8 pick a tool, the way every editor does it
@@ -450,6 +473,21 @@ public final class AnnotateWindow: NSObject, NSWindowDelegate {
         let movedX = picked.map { canvas.marks[$0].from.x } ?? -1
         report("select and move", picked != nil && movedX - startX > 30,
                String(format: "x %.0f -> %.0f", startX, movedX))
+
+        // crop: keep the middle, and every mark must move with it
+        let beforeCrop = canvas.imageSize
+        let markBefore = canvas.marks[0].from
+        canvas.isCropping = true
+        drag(CGPoint(x: 80, y: 60), CGPoint(x: 1080, y: 700))
+        applyCrop()
+        // a drag is limited by the on-screen scale, so allow a pixel either way
+        report("crop applied", abs(canvas.imageSize.width - 1000) <= 2
+               && abs(canvas.imageSize.height - 640) <= 2,
+               "\(Int(beforeCrop.width))x\(Int(beforeCrop.height)) -> "
+               + "\(Int(canvas.imageSize.width))x\(Int(canvas.imageSize.height))")
+        report("marks moved with the crop",
+               abs(canvas.marks[0].from.x - (markBefore.x - 80)) <= 2,
+               String(format: "x %.0f -> %.0f", markBefore.x, canvas.marks[0].from.x))
 
         // dressing: a background with padding, corners and a shadow
         canvas.dressing.background = Frame.presets[1]

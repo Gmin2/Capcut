@@ -8,15 +8,55 @@ import ScreenCaptureKit
 /// rectangle are never in the picture.
 public enum Capture {
 
+    /// Seconds to wait before a capture, so a menu can be opened first.
+    public static var timer: Int {
+        get { UserDefaults.standard.integer(forKey: "capture.timer") }
+        set { UserDefaults.standard.set(newValue, forKey: "capture.timer") }
+    }
+
     public static func area() {
         Task { @MainActor in
             guard let picked = await SelectionOverlay.pick() else { return }
-            await shoot(display: picked.display, region: picked.rect)
+            await countdown()
+            switch picked {
+            case .area(let rect, let display):
+                await shoot(display: display, region: rect)
+            case .window(let window):
+                await shoot(window: window)
+            }
+        }
+    }
+
+    @MainActor
+    private static func countdown() async {
+        let seconds = timer
+        guard seconds > 0 else { return }
+        await withCheckedContinuation { c in
+            Countdown().run(from: seconds) { c.resume() }
+        }
+    }
+
+    /// One window on its own, with everything behind it left out.
+    @MainActor
+    static func shoot(window: SCWindow) async {
+        let config = SCStreamConfiguration()
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        config.width = Int(window.frame.width * scale)
+        config.height = Int(window.frame.height * scale)
+        config.showsCursor = false
+        do {
+            let image = try await SCScreenshotManager.captureImage(
+                contentFilter: SCContentFilter(desktopIndependentWindow: window),
+                configuration: config)
+            finish(image)
+        } catch {
+            Log.line("ERROR: window capture failed, \(error.localizedDescription)")
         }
     }
 
     public static func fullScreen(_ displayID: CGDirectDisplayID? = nil) {
         Task { @MainActor in
+            await countdown()
             let id = displayID ?? NSScreen.main.flatMap {
                 $0.deviceDescription[.init("NSScreenNumber")] as? CGDirectDisplayID
             } ?? CGMainDisplayID()
@@ -101,21 +141,29 @@ public enum Capture {
 
 /// The dim-and-drag layer. One window per screen so a selection can start on
 /// any of them.
+enum Picked {
+    case area(CGRect, CGDirectDisplayID)
+    case window(SCWindow)
+}
+
 @MainActor
 final class SelectionOverlay {
     private var windows: [NSWindow] = []
-    private var continuation: CheckedContinuation<(rect: CGRect, display: CGDirectDisplayID)?, Never>?
+    private var continuation: CheckedContinuation<Picked?, Never>?
     private static var live: SelectionOverlay?
+    /// Windows on screen, for the space-bar window mode.
+    private var pickable: [(window: SCWindow, frame: NSRect)] = []
 
-    static func pick() async -> (rect: CGRect, display: CGDirectDisplayID)? {
+    static func pick() async -> Picked? {
         let overlay = SelectionOverlay()
         live = overlay
         defer { live = nil }
         return await overlay.run()
     }
 
-    private func run() async -> (rect: CGRect, display: CGDirectDisplayID)? {
-        await withCheckedContinuation { c in
+    private func run() async -> Picked? {
+        Task { await loadWindows() }
+        return await withCheckedContinuation { c in
             continuation = c
             for screen in NSScreen.screens {
                 let w = NSWindow(contentRect: screen.frame, styleMask: [.borderless],
@@ -131,6 +179,47 @@ final class SelectionOverlay {
             NSApp.activate(ignoringOtherApps: true)
             windows.first?.makeKey()
         }
+    }
+
+    /// SCWindow frames are y-down from the top of the main display; the
+    /// overlay works in AppKit points, y-up.
+    static func appKitFrame(_ frame: CGRect, mainHeight: CGFloat) -> NSRect {
+        NSRect(x: frame.minX, y: mainHeight - frame.maxY, width: frame.width, height: frame.height)
+    }
+
+    static let notWindows: Set<String> = [
+        "com.apple.dock", "com.apple.controlcenter", "com.apple.WindowManager",
+        "com.apple.notificationcenterui", "com.apple.systemuiserver", "com.apple.Spotlight",
+    ]
+
+    private func loadWindows() async {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(
+            true, onScreenWindowsOnly: true) else { return }
+        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+        let me = getpid()
+        let found = content.windows.filter {
+            // a real window, not the menu bar, the dock or a floating strip
+            $0.windowLayer == 0 && $0.frame.width > 160 && $0.frame.height > 120
+                && $0.owningApplication?.processID != me
+                && !SelectionOverlay.notWindows.contains($0.owningApplication?.bundleIdentifier ?? "")
+        }.map { ($0, SelectionOverlay.appKitFrame($0.frame, mainHeight: mainHeight)) }
+        await MainActor.run {
+            self.pickable = found
+            for w in self.windows { w.contentView?.needsDisplay = true }
+        }
+    }
+
+    /// Smallest window under the pointer, which is the one a person means.
+    func window(at point: NSPoint) -> (window: SCWindow, frame: NSRect)? {
+        pickable.filter { $0.frame.contains(point) }
+            .min { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+    }
+
+    func finishWindow(_ window: SCWindow) {
+        for w in windows { w.orderOut(nil) }
+        windows.removeAll()
+        continuation?.resume(returning: .window(window))
+        continuation = nil
     }
 
     /// AppKit y-up global -> display-local y-down, which is what capture wants.
@@ -151,7 +240,7 @@ final class SelectionOverlay {
             return
         }
         let local = SelectionOverlay.local(rect, on: screen.frame)
-        continuation?.resume(returning: (local, id))
+        continuation?.resume(returning: .area(local, id))
         continuation = nil
     }
 }
@@ -161,6 +250,8 @@ private final class SelectionView: NSView {
     private let screen: NSScreen
     private var start: NSPoint?
     private var current: NSPoint?
+    private var windowMode = false
+    private var hovered: (window: SCWindow, frame: NSRect)?
 
     init(screen: NSScreen, overlay: SelectionOverlay) {
         self.screen = screen
@@ -187,8 +278,13 @@ private final class SelectionView: NSView {
         NSColor.black.withAlphaComponent(0.35).setFill()
         bounds.fill()
 
+        if windowMode {
+            drawWindowMode()
+            return
+        }
+
         guard let r = selection, r.width > 0, r.height > 0 else {
-            let hint = "Drag to capture an area. Esc to cancel." as NSString
+            let hint = "Drag to capture an area. Space for a window. Esc to cancel." as NSString
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 15, weight: .medium),
                 .foregroundColor: NSColor.white.withAlphaComponent(0.85),
@@ -220,18 +316,61 @@ private final class SelectionView: NSView {
         label.draw(at: NSPoint(x: tag.minX + 7, y: tag.minY + 4), withAttributes: attrs)
     }
 
+    private func drawWindowMode() {
+        let hint = "Click a window. Space for an area. Esc to cancel." as NSString
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 15, weight: .medium),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.85),
+        ]
+        let size = hint.size(withAttributes: attrs)
+        hint.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY),
+                  withAttributes: attrs)
+
+        guard let hovered else { return }
+        let local = NSRect(x: hovered.frame.minX - screen.frame.minX,
+                           y: hovered.frame.minY - screen.frame.minY,
+                           width: hovered.frame.width, height: hovered.frame.height)
+        NSColor.clear.setFill()
+        local.fill(using: .copy)
+        let outline = NSBezierPath(rect: local)
+        outline.lineWidth = 2
+        NSColor(srgbRed: 0, green: 0.71, blue: 1, alpha: 1).setStroke()
+        outline.stroke()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard windowMode else { return }
+        let global = NSPoint(x: convert(event.locationInWindow, from: nil).x + screen.frame.minX,
+                             y: convert(event.locationInWindow, from: nil).y + screen.frame.minY)
+        hovered = overlay?.window(at: global)
+        needsDisplay = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect],
+                                       owner: self))
+    }
+
     override func mouseDown(with event: NSEvent) {
+        if windowMode {
+            if let hovered { overlay?.finishWindow(hovered.window) }
+            return
+        }
         start = convert(event.locationInWindow, from: nil)
         current = start
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard !windowMode else { return }
         current = convert(event.locationInWindow, from: nil)
         needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard !windowMode else { return }
         current = convert(event.locationInWindow, from: nil)
         guard let r = selection else { return }
         let global = NSRect(x: r.minX + screen.frame.minX, y: r.minY + screen.frame.minY,
@@ -240,7 +379,16 @@ private final class SelectionView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { overlay?.finish(nil, on: nil) }   // esc
+        switch event.keyCode {
+        case 53: overlay?.finish(nil, on: nil)   // esc
+        case 49:                                  // space
+            windowMode.toggle()
+            start = nil
+            current = nil
+            hovered = nil
+            needsDisplay = true
+        default: break
+        }
     }
 }
 
@@ -296,10 +444,14 @@ public final class Shelf: NSObject, NSDraggingSource {
         self.thumb = thumb
 
         let markup = FillButton("Markup") { [weak self] in self?.annotate() }
+        let pin = FillButton("Pin") { [weak self] in self?.pinIt() }
+        pin.toolTip = "Keep this on top of everything"
+        let text = FillButton("Text") { [weak self] in self?.copyText() }
+        text.toolTip = "Copy the words in this capture"
         let copy = FillButton("Copy") { [weak self] in self?.copyAgain() }
         let reveal = FillButton("Finder") { [weak self] in self?.reveal() }
         let close = IconButton(.trash) { [weak self] in self?.discard() }
-        let row = NSStackView(views: [markup, copy, reveal, close])
+        let row = NSStackView(views: [markup, pin, text, copy, reveal, close])
         row.spacing = 8
 
         for v in [thumb, row] as [NSView] {
@@ -330,6 +482,21 @@ public final class Shelf: NSObject, NSDraggingSource {
         guard let url else { return }
         AnnotateWindow.show(url: url)
         hide()
+    }
+
+    private func pinIt() {
+        guard let url else { return }
+        Pin.show(url: url)
+        hide()
+    }
+
+    private func copyText() {
+        guard let url, let image = NSImage(contentsOf: url)?
+            .cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        Task { @MainActor in
+            _ = await TextInImage.copyEverything(from: image)
+            self.restartTimer()
+        }
     }
 
     private func copyAgain() {
