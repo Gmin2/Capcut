@@ -136,7 +136,7 @@ extension Project {
     /// A fresh phone take: the whole recording kept, a phone bezel on dusk,
     /// taps shown as touches rather than a mouse pointer, no automatic zooms
     /// because an app demo reads better held still.
-    public static func makePhone(manifest: Manifest, kind: PhoneKind) -> Project {
+    public static func makePhone(manifest: Manifest, kind: PhoneKind, dir: URL) -> Project {
         var p = Project()
         let screen = CGSize(width: manifest.screen.pixelSize[0],
                             height: manifest.screen.pixelSize[1])
@@ -157,6 +157,8 @@ extension Project {
         p.cursor.rippleColor = "#8E8E96B8"
         p.cursor.rippleDuration = 0.5
         p.motionBlur = 0
+        p.zooms = AutoZoom.phone(clicks: Events.load(from: dir).clicks, sourceSize: screen,
+                                 duration: manifest.screen.duration)
         p.notes = "Phone take. snippets: the loops to post, in source seconds. "
             + "look framed or bare, canvas feed, story or square, loop crossfade or none."
         return p

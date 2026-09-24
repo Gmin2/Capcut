@@ -100,6 +100,12 @@ What a phone take gets that an imported video does not:
   so clicks on its window are mapped onto the screen, which needs
   Window > Show Device Bezels turned off
 
+Taps also place zooms. On a phone take the camera pushes in on the whole
+phone toward the tap, bezel and all, instead of cropping the picture inside
+it, and taps close together share one zoom that pans between them. They sit
+on the Zoom lane like any other zoom; `cutaway phone zoom` places them again
+on an older take, `--level` changes how far in, `--none` clears them.
+
 Snippets live in project.json and can be added, changed or rendered later:
 
     cutaway snippet add --name send --from 2.1 --to 6.4

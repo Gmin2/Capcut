@@ -258,6 +258,11 @@ public enum CLI {
           phone devices
               Lists running emulators and booted simulators.
 
+          phone zoom [--in DIR] [--level L] [--none]
+              Places zooms on the taps of a phone take: the camera pushes in on
+              the phone toward each tap and pans between taps close together.
+              New phone takes get these already. --none clears them.
+
           phone status-bar on|off [--device android|iphone] [--serial ID]
               Sets or clears the clean status bar by hand, for screenshots.
 
@@ -765,6 +770,21 @@ public enum CLI {
                 Paths.linkLatest(to: out)
             }
             emit(out.path)
+            return 0
+
+        case "zoom":
+            let dir = opts.url("--in") ?? defaultDir
+            guard var p = Project.load(from: dir),
+                  let m = Manifest.load(from: dir.appendingPathComponent("recording.json")) else {
+                FileHandle.standardError.write(Data("no take at \(dir.path)\n".utf8))
+                return 1
+            }
+            let screen = CGSize(width: m.screen.pixelSize[0], height: m.screen.pixelSize[1])
+            p.zooms = opts.flag("--none") ? [] : AutoZoom.phone(
+                clicks: Events.load(from: dir).clicks, sourceSize: screen,
+                duration: m.screen.duration, level: opts.double("--level") ?? 1.6)
+            try p.write(to: dir)
+            emit("\(p.zooms.count) zoom(s)")
             return 0
 
         default:

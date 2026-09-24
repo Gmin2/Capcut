@@ -365,7 +365,10 @@ public final class Timeline: @unchecked Sendable {
                       outputSize: CGSize) -> FrameDescription {
         var (screen, webcam) = layout(at: t, screenSize: screenSize,
                                       webcamSize: webcamSize, outputSize: outputSize)
-        if var s = screen {
+        if deviceFrame.isPhone, var s = screen {
+            applyPhoneCamera(to: &s, at: t, outputSize: outputSize)
+            screen = s
+        } else if var s = screen {
             let c = crop(at: t)
             s.src = SIMD4(Float(c.origin.x), Float(c.origin.y),
                           Float(c.width), Float(c.height))
@@ -398,6 +401,70 @@ public final class Timeline: @unchecked Sendable {
             captionForFrame = nil
         }
         return f
+    }
+
+    /// A phone take zooms like a camera moving in on the phone: the whole
+    /// plate, bezel and all, grows around the tap, and the picture inside is
+    /// never cropped. Cropping would enlarge the UI inside a bezel that stays
+    /// the same size, which no real phone does.
+    private func applyPhoneCamera(to s: inout LayerParams, at t: Double, outputSize: CGSize) {
+        guard let zoom = zooms.first(where: { t >= $0.start && t <= $0.end }) else { return }
+        let z = level(at: t, zoom: zoom)
+        guard z > 1.0001 else { return }
+        let target = max(zoom.level, 1.0001)
+        let progress = (z - 1) / (target - 1)
+
+        let bezel = Double(s.frameKind > 2.5 ? s.frameBar : 0)
+        let plate = CGRect(x: Double(s.dst.x), y: Double(s.dst.y),
+                           width: Double(s.dst.z), height: Double(s.dst.w))
+        let content = plate.insetBy(dx: bezel, dy: bezel)
+        let focus = phoneFocus(at: t, zoom: zoom)
+        let point = CGPoint(x: content.minX + focus.x / sourceSize.width * content.width,
+                            y: content.minY + focus.y / sourceSize.height * content.height)
+
+        // Keep the phone filling the frame: the camera may not go past the
+        // plate's own edge, and centres it on any axis where it no longer
+        // fills. The canvas centre at the start keeps it continuous with the
+        // unzoomed frame.
+        let mid = CGPoint(x: outputSize.width / 2, y: outputSize.height / 2)
+        func clamp(_ v: Double, _ lo: Double, _ hi: Double, _ view: Double) -> Double {
+            let half = view / (2 * z)
+            return lo + half <= hi - half ? min(max(v, lo + half), hi - half) : (lo + hi) / 2
+        }
+        let aim = CGPoint(x: clamp(point.x, plate.minX, plate.maxX, outputSize.width),
+                          y: clamp(point.y, plate.minY, plate.maxY, outputSize.height))
+        let centre = CGPoint(x: mid.x + (aim.x - mid.x) * progress,
+                             y: mid.y + (aim.y - mid.y) * progress)
+
+        let fz = Float(z)
+        s.dst = SIMD4(Float((plate.minX - centre.x) * z + mid.x),
+                      Float((plate.minY - centre.y) * z + mid.y),
+                      s.dst.z * fz, s.dst.w * fz)
+        s.cornerRadius *= fz
+        s.frameBar *= fz
+        s.shadowRadius *= fz
+        s.shadowOffset *= fz
+        s.borderWidth *= fz
+    }
+
+    /// Where a phone zoom looks: its anchor, or with taps inside it the most
+    /// recent one, eased over from the one before so the camera pans rather
+    /// than cuts. The move starts a moment before the tap, the way a viewer's
+    /// eye leads to where the finger is going.
+    func phoneFocus(at t: Double, zoom: Zoom) -> CGPoint {
+        let anchor = CGPoint(x: zoom.anchor[0] * sourceSize.width,
+                             y: zoom.anchor[1] * sourceSize.height)
+        let taps = clicks.filter { $0.t >= zoom.start - 0.01 && $0.t <= zoom.end }
+        guard let first = taps.first else { return anchor }
+        let lead = 0.35, move = 0.45
+        var from = first.p, to = first.p, begin = -Double.infinity
+        for c in taps.dropFirst() where t >= c.t - lead {
+            from = to
+            to = c.p
+            begin = c.t - lead
+        }
+        let f = CubicBezier.zoomIn.solve(min(max((t - begin) / move, 0), 1))
+        return CGPoint(x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f)
     }
 
     /// Packs up to four active masks into the layer's shader parameters.
