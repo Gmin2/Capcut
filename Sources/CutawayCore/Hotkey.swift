@@ -14,12 +14,13 @@ public final class Hotkey {
     /// What a shortcut is for. Each one can be rebound, and is stored by
     /// this name, so a new build never loses what someone chose.
     public enum Action: String, CaseIterable {
-        case record, pause, captureArea, captureScreen, captureRepeat, captureScrolling
+        case record, pause, snippet, captureArea, captureScreen, captureRepeat, captureScrolling
 
         public var title: String {
             switch self {
             case .record: return "Start or stop recording"
             case .pause: return "Pause a recording"
+            case .snippet: return "Start or end a snippet on a phone take"
             case .captureArea: return "Capture an area"
             case .captureScreen: return "Capture the screen"
             case .captureRepeat: return "Capture the same area again"
@@ -31,6 +32,7 @@ public final class Hotkey {
             switch self {
             case .record: return .record
             case .pause: return .pause
+            case .snippet: return .snippet
             case .captureArea: return .captureArea
             case .captureScreen: return .captureScreen
             case .captureRepeat: return .captureRepeat
@@ -116,6 +118,11 @@ public final class Hotkey {
         public static let pause = Combo(keyCode: UInt32(kVK_ANSI_9),
                                         modifiers: UInt32(cmdKey | shiftKey),
                                         label: "⌘⇧9")
+        /// Next to record and pause, so marking a snippet is the same reach
+        /// while the other hand is on the emulator.
+        public static let snippet = Combo(keyCode: UInt32(kVK_ANSI_0),
+                                          modifiers: UInt32(cmdKey | shiftKey),
+                                          label: "⌘⇧0")
         /// ⌘⇧6 grabs an area, ⌘⇧7 the whole screen. Again clear of ⌘⇧3/4/5.
         public static let captureArea = Combo(keyCode: UInt32(kVK_ANSI_6),
                                               modifiers: UInt32(cmdKey | shiftKey),

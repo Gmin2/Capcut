@@ -191,6 +191,9 @@ public final class Timeline: @unchecked Sendable {
     /// pixel it was actually over even mid-zoom.
     public func cursorParams(at t: Double, screen: LayerParams?,
                              outputSize: CGSize) -> CursorParams? {
+        if cursorStyle.touches {
+            return touchParams(at: t, screen: screen, outputSize: outputSize)
+        }
         guard cursorStyle.visible, let screen, screen.opacity > 0.01,
               let sp = sample(drawTimes, drawPoints, t) else { return nil }
 
@@ -234,6 +237,42 @@ public final class Timeline: @unchecked Sendable {
             p.rippleAlpha = Float((1 - age) * Double(screen.opacity))
             p.rippleColor = Style.rgba(cursorStyle.rippleColor)
         }
+        return p
+    }
+
+    /// A fingertip for each tap: lands at full size, swells a little and
+    /// fades. Sized off the screen on the canvas rather than the canvas, so
+    /// it stays a finger's width however small the phone is drawn.
+    func touchParams(at t: Double, screen: LayerParams?, outputSize: CGSize) -> CursorParams? {
+        guard let screen, screen.opacity > 0.01, cursorStyle.clickRipple,
+              let c = clicks.last(where: { t >= $0.t && t - $0.t <= cursorStyle.rippleDuration })
+        else { return nil }
+
+        let crop = CGRect(x: Double(screen.src.x), y: Double(screen.src.y),
+                          width: Double(screen.src.z), height: Double(screen.src.w))
+        // The phone bezel grows the plate outward; the picture is inside it.
+        let bezel = screen.frameKind > 2.5 ? Double(screen.frameBar) : 0
+        let dst = CGRect(x: Double(screen.dst.x) + bezel, y: Double(screen.dst.y) + bezel,
+                         width: Double(screen.dst.z) - 2 * bezel,
+                         height: Double(screen.dst.w) - 2 * bezel)
+        guard crop.width > 0, crop.height > 0 else { return nil }
+        let local = CGPoint(x: (c.p.x - crop.minX) / crop.width,
+                            y: (c.p.y - crop.minY) / crop.height)
+        guard (0...1).contains(local.x), (0...1).contains(local.y) else { return nil }
+
+        let age = (t - c.t) / cursorStyle.rippleDuration
+        let eased = CubicBezier.zoomIn.solve(age)
+        var p = CursorParams()
+        p.outputSize = SIMD2(Float(outputSize.width), Float(outputSize.height))
+        // No pointer: an empty rect off the canvas draws nothing.
+        p.rect = SIMD4(-10, -10, 1, 1)
+        p.opacity = 0
+        p.ripplePos = SIMD2(Float(dst.minX + local.x * dst.width),
+                            Float(dst.minY + local.y * dst.height))
+        p.rippleRadius = Float(dst.width * 0.055 * (0.9 + 0.35 * eased)
+                               * cursorStyle.scale / 1.7)
+        p.rippleAlpha = Float((1 - age) * Double(screen.opacity))
+        p.rippleColor = Style.rgba(cursorStyle.rippleColor)
         return p
     }
 

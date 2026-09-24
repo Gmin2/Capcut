@@ -75,6 +75,53 @@ feeds, or as a gif:
     cutaway export --in DIR --width 1080 --height 2280 --codec h264 --out demo.mp4
     cutaway export --in DIR --width 480 --height 1014 --fps 12 --out demo.gif
 
+## Phone snippets
+
+Short silent loops of an app, one action each, for posting. Recorded off the
+Android emulator or the iPhone simulator rather than a real phone, so no
+notification, carrier or real clock ever gets in the shot.
+
+    cutaway phone devices                         # running emulators and simulators
+    cutaway phone record                          # android emulator
+    cutaway phone record --device iphone --name "guard adds margin"
+
+While it records, press return to start a snippet and return again to end it;
+`q` then return, or ctrl-c, stops. In the app, pick Capture: Phone on the
+record screen, and ⌘⇧0 does the same from anywhere.
+
+What a phone take gets that an imported video does not:
+
+- a clean status bar for the length of the take: 9:41, full battery and wifi,
+  no notifications (android demo mode, `simctl status_bar` on the simulator),
+  put back afterwards
+- the screen at its own resolution, 60fps, as long as the take really was
+- every tap, at the pixel and the moment it happened, drawn as a fingertip.
+  Android reads the kernel's touch events over adb. The simulator has none,
+  so clicks on its window are mapped onto the screen, which needs
+  Window > Show Device Bezels turned off
+
+Snippets live in project.json and can be added, changed or rendered later:
+
+    cutaway snippet add --name send --from 2.1 --to 6.4
+    cutaway snippet add --name send --look bare         # change one field
+    cutaway snippet add --name send --canvas story --background paper
+    cutaway snippet list
+    cutaway snippet export --gif                        # every snippet
+    cutaway snippet export --name send --out ~/posts
+
+| field | |
+|---|---|
+| `look` | `framed`: the phone in a bezel on a background. `bare`: the screen alone, edge to edge, for a page that draws its own phone |
+| `canvas` | `feed` 1080x1350, `story` 1080x1920, `square` 1080x1080. bare keeps the screen's own shape |
+| `background` | any background preset, `dusk` by default |
+| `loop` | `crossfade` blends the end into the start so it loops with no jump; `none` plays it straight |
+
+Each snippet renders to `NAME.mp4` (h264, 60fps, no sound) and `NAME.png`,
+its first frame, for a poster. `--gif` adds a 540px gif.
+
+`phone` needs adb for android (Android Studio installs it, or set
+`ANDROID_HOME`), Xcode for the simulator, and ffmpeg for both.
+
 ## Undo
 
 Command-Z and shift-command-Z, or the buttons in the transport. Every edit is a
@@ -216,7 +263,7 @@ event and the letter is not.
 | field | |
 |---|---|
 | `callouts` | `[{at, duration, text, subtitle, style}]` - `lowerThird`, `center`, `topLeft`, `topCenter`, `bottomCenter` |
-| `deviceFrame` | `none`, `macWindow`, `browser`, `phone` - chrome drawn around the screen |
+| `deviceFrame` | `none`, `macWindow`, `browser`, `phone`, `iphone` - chrome drawn around the screen. `iphone` has no camera hole, since the simulator draws its own island |
 | `masks` | `[{rect, start, end, style, strength}]` - `mosaic` or `blur`, rect normalised to the source |
 | `motionBlur` | 0 off, 0.85 default, roughly a film shutter |
 
@@ -248,6 +295,7 @@ says so rather than writing an empty transcript that looks successful.
 | `ember` | warm red to black |
 | `forest` | deep teal |
 | `paper` | light, with grain |
+| `dusk` | soft violet, the phone snippet default |
 | `ink` | flat near-black |
 | `screen` | the recording itself, blurred and dimmed behind the plate |
 

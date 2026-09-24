@@ -28,7 +28,8 @@ public struct Project: Codable {
     public var callouts: [Callout] = []
     public var calloutTheme = CalloutTheme()
     public var captions = CaptionStyle()
-    /// "none", "macWindow", "browser" or "phone", drawn around the screen layer.
+    /// "none", "macWindow", "browser", "phone" or "iphone", drawn around the
+    /// screen layer.
     public var deviceFrame: DeviceFrame = .none
     /// Extra or replacement layouts by name, for framing the built-in ones do
     /// not cover, like a portrait phone recording filling a tall canvas.
@@ -40,9 +41,11 @@ public struct Project: Codable {
     /// does. 1.25 is the usual demo trick: brisk without sounding silly.
     public var speed: Double = 1
     /// Shorthand for style.background. Names: midnight, slate, ember, forest,
-    /// paper, ink, screen.
+    /// paper, ink, dusk, screen.
     public var backgroundPreset: String?
     public var voiceover: Voiceover?
+    /// Short loops cut out of this take to post on their own.
+    public var snippets: [Snippet] = []
 
     public struct Output: Codable {
         public var width: Double = 1920
@@ -89,6 +92,7 @@ public struct Project: Codable {
         speed = get(.speed, 1)
         backgroundPreset = try? c.decode(String.self, forKey: .backgroundPreset)
         voiceover = try? c.decode(Voiceover.self, forKey: .voiceover)
+        snippets = get(.snippets, [])
     }
 
     public init() {}

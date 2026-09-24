@@ -6,10 +6,13 @@ import simd
 /// a layout is resolution independent.
 /// Chrome drawn around a layer: nothing, a macOS title bar with traffic
 /// lights, a browser bar with an address pill, or a phone bezel with a camera
-/// hole. Drawn in the shader rather than as a bitmap so it stays sharp at any
+/// hole. iphone is the bezel without the hole, for a simulator recording that
+/// already has its own Dynamic Island in the picture. Drawn in the shader rather than as a bitmap so it stays sharp at any
 /// zoom and any output size.
 public enum DeviceFrame: String, Codable {
-    case none, macWindow, browser, phone
+    case none, macWindow, browser, phone, iphone
+
+    public var isPhone: Bool { self == .phone || self == .iphone }
 }
 
 public struct Placement: Codable {
@@ -171,7 +174,7 @@ extension Placement {
         p.borderWidth = Float(borderWidth)
         p.borderColor = Style.rgba(borderColor)
 
-        if frame == .phone {
+        if frame.isPhone {
             // The bezel wraps the screen on every side, so the plate grows
             // outward by it and the corners round off with it. Sized off the
             // screen width because that is what a real phone's bezel follows.
@@ -179,7 +182,7 @@ extension Placement {
             p.dst = SIMD4(p.dst.x - bezel, p.dst.y - bezel, p.dst.z + bezel * 2, p.dst.w + bezel * 2)
             p.cornerRadius += bezel
             p.frameBar = bezel
-            p.frameKind = 3
+            p.frameKind = frame == .iphone ? 4 : 3
         } else if frame != .none {
             // The bar sits above the content, so the plate grows upward and the
             // video itself is not squashed.

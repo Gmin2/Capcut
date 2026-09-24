@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let redoButton = IconButton(.undo, transparent: true)
     private var watcher: FileWatcher?
     private var recorder: Recorder?
+    /// A phone take in progress. Separate from `recorder` because nothing of
+    /// the mac is captured: no screen grant, no countdown, no hiding.
+    private var phoneRecorder: PhoneRecorder?
+    private var snippetOpen = false
     private var tick: Timer?
     private var hotkey: Hotkey?
     private var countdown = Countdown()
@@ -90,15 +94,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             v.layer?.masksToBounds = true
             v.translatesAutoresizingMaskIntoConstraints = false
             previewCard.addSubview(v)
+            // as big as the card allows in either direction, but never pushing
+            // the card or the window: a tall phone canvas would otherwise win
+            // against the window's own size and squeeze everything else
             let fillWidth = v.widthAnchor.constraint(equalTo: previewCard.widthAnchor, constant: -24)
-            fillWidth.priority = .defaultHigh
+            fillWidth.priority = NSLayoutConstraint.Priority(240)
+            let fillHeight = v.heightAnchor.constraint(equalTo: previewCard.heightAnchor, constant: -24)
+            fillHeight.priority = NSLayoutConstraint.Priority(240)
+            let aspect = v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: 9.0 / 16.0)
+            previewAspect = aspect
             NSLayoutConstraint.activate([
                 v.centerXAnchor.constraint(equalTo: previewCard.centerXAnchor),
                 v.centerYAnchor.constraint(equalTo: previewCard.centerYAnchor),
                 v.widthAnchor.constraint(lessThanOrEqualTo: previewCard.widthAnchor, constant: -24),
                 v.heightAnchor.constraint(lessThanOrEqualTo: previewCard.heightAnchor, constant: -24),
-                v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: 9.0 / 16.0),
+                aspect,
                 fillWidth,
+                fillHeight,
             ])
         }
 
@@ -337,6 +349,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        timelineView.onAddSnippet = { [weak self] t in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            var added = 0
+            self.editProject { p in
+                let end = min(t + 2, duration)
+                let n = (p.snippets.map { Int($0.name.split(separator: " ").last ?? "") ?? 0 }.max() ?? 0) + 1
+                p.snippets.append(Snippet(name: "clip \(n)", start: max(0, min(t - 1, end - 0.5)), end: end))
+                p.snippets.sort { $0.start < $1.start }
+                added = p.snippets.firstIndex { $0.name == "clip \(n)" } ?? 0
+            }
+            self.selectSnippet(added)
+        }
+        timelineView.onMoveSnippet = { [weak self] index, edge, t in
+            guard let self else { return }
+            let duration = self.timelineView.duration
+            self.editProject { p in
+                guard p.snippets.indices.contains(index) else { return }
+                var s = p.snippets[index]
+                let minLength = 0.5
+                switch edge {
+                case -1: s.start = min(max(0, t), s.end - minLength)
+                case 1: s.end = min(max(t, s.start + minLength), duration)
+                default:
+                    let length = s.duration
+                    s.start = min(max(0, t), duration - length)
+                    s.end = s.start + length
+                }
+                p.snippets[index] = s
+            }
+        }
+        timelineView.onDeleteSnippet = { [weak self] index in
+            self?.selectedSnippet = nil
+            self?.editProject { p in
+                guard p.snippets.indices.contains(index) else { return }
+                p.snippets.remove(at: index)
+            }
+        }
+        timelineView.onSelectSnippet = { [weak self] index in self?.selectSnippet(index) }
+        inspector.onSelectSnippet = { [weak self] index in self?.selectSnippet(index) }
+        inspector.onExportSnippets = { [weak self] in self?.exportSnippets() }
+
         timelineView.onDeleteZoom = { [weak self] index in
             self?.editProject { p in
                 guard index < p.zooms.count else { return }
@@ -386,7 +440,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         sidebar.onNewRecording = { [weak self] in
             guard let self else { return }
-            if self.recorder?.isRecording == true { self.toggleRecord() } else { self.showSetup() }
+            if self.recorder?.isRecording == true || self.phoneRecorder != nil {
+                self.toggleRecord()
+            } else {
+                self.showSetup()
+            }
         }
         setup.isHidden = true
         setup.onClose = { [weak self] in self?.hideSetup() }
@@ -394,6 +452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.skipCountdown = !countdown
             self?.toggleRecord()
         }
+        setup.onSnippet = { [weak self] in self?.markSnippet() }
 
         inspector.apply = { [weak self] change in self?.editProject(change) }
         inspector.onSeek = { [weak self] sourceT in
@@ -476,6 +535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func open(_ url: URL) {
         preview?.pause()
         recordingDir = url.resolvingSymlinksInPath()
+        selectedSnippet = nil
         Paths.linkLatest(to: recordingDir)
         watcher = nil
         history.clear()
@@ -691,6 +751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey?.rebind([
             .record: { [weak self] in self?.toggleRecord() },
             .pause: { [weak self] in self?.togglePause() },
+            .snippet: { [weak self] in self?.markSnippet() },
             .captureArea: { Capture.area() },
             .captureScreen: { Capture.fullScreen() },
             .captureRepeat: { Task { @MainActor in Capture.repeatLast() } },
@@ -850,12 +911,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // playhead is mapped in from edited time.
         timelineView.duration = m.screen.duration
         timelineView.timeline = tl
+        if let i = selectedSnippet, !project.snippets.indices.contains(i) { selectedSnippet = nil }
+        if selectedSnippet == nil, !project.snippets.isEmpty { selectedSnippet = 0 }
+        timelineView.snippets = project.snippets
+        timelineView.selectedSnippet = selectedSnippet
+        inspector.selectedSnippet = selectedSnippet
         timelineView.loadWaveform(from: recordingDir, manifest: m)
         timelineView.window?.invalidateCursorRects(for: timelineView)
         inspector.show(project, recording: recordingDir, duration: m.screen.duration)
         transcript.show(Transcript.load(from: recordingDir), cut: project.segments,
                         duration: m.screen.duration)
-        preview?.load(recordingDir: recordingDir, outputSize: outputSize,
+        // a phone take previews on its own tall canvas, the one its snippets use
+        let canvas = project.deviceFrame.isPhone ? project.output.size : outputSize
+        setPreviewShape(canvas)
+        preview?.load(recordingDir: recordingDir,
+                      outputSize: canvas,
                       timeline: tl, screenSize: screenSize, webcamSize: webcamSize)
         Log.line(String(format: "%.0f×%.0f  60 fps", screenSize.width, screenSize.height))
         if !tl.timeMap.isIdentity {
@@ -867,7 +937,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleRecord() {
         if let r = recorder, r.isRecording { stopRecording(r); return }
+        if let r = phoneRecorder { stopPhone(r); return }
         preview?.pause()
+        if RecordSettings.load().capture == .phone {
+            beginPhone()
+            return
+        }
 
         // Hide first, then count down, so the window is out of shot before the
         // first frame rather than being cut out afterwards.
@@ -930,6 +1005,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .display: break
         case .window: r.onlyApp = settings.app
         case .area: r.area = settings.areaPoints(of: settings.displayID ?? CGMainDisplayID())
+        case .phone:
+            // handled by beginPhone, never reaches here
+            break
         case .camera:
             // the pipeline still wants a screen track, so keep it tiny; the
             // edit only ever shows the camera
@@ -999,6 +1077,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func beginPhone() {
+        let settings = RecordSettings.load()
+        let device = settings.phone.flatMap(PhoneDevice.init(key:))
+        let target = Paths.newRecording()
+        let r = PhoneRecorder(kind: device?.kind ?? .android, dir: target)
+        if setup.isHidden { showSetup() }
+        statusLabel.stringValue = "starting the phone recording…"
+        Task {
+            do {
+                // adb and simctl block for a second or two getting ready
+                try await Task.detached { try r.start(device: device?.id) }.value
+                await MainActor.run {
+                    self.phoneRecorder = r
+                    self.snippetOpen = false
+                    self.setup.setPhoneRecording(snippetOpen: false)
+                    self.startTick()
+                }
+            } catch {
+                Log.line("ERROR: \(error.localizedDescription)")
+                await MainActor.run { self.statusLabel.stringValue = error.localizedDescription }
+            }
+        }
+    }
+
+    private func stopPhone(_ r: PhoneRecorder) {
+        stopTick()
+        phoneRecorder = nil
+        statusLabel.stringValue = "joining the phone recording…"
+        refreshRecordUI()
+        Task {
+            do {
+                let take = try await r.stop()
+                await MainActor.run {
+                    self.hideSetup()
+                    self.sidebar.reload(selected: take)
+                    self.open(take)
+                }
+            } catch {
+                Log.line("ERROR: \(error.localizedDescription)")
+                await MainActor.run { self.statusLabel.stringValue = error.localizedDescription }
+            }
+        }
+    }
+
+    /// Opens a snippet at this moment of a phone take, or closes the open one.
+    private func markSnippet() {
+        guard let r = phoneRecorder else { return }
+        snippetOpen = r.mark()
+        setup.setPhoneRecording(snippetOpen: snippetOpen)
+        Log.line(String(format: "%@ snippet at %.1fs", snippetOpen ? "start" : "end", r.elapsed))
+    }
+
     @objc private func togglePause() {
         guard let r = recorder, r.isRecording else { return }
         r.isPaused ? r.resume() : r.pause()
@@ -1028,15 +1158,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshRecordUI() {
         let r = recorder
-        let live = r?.isRecording ?? false
+        let phone = phoneRecorder
+        let live = (r?.isRecording ?? false) || phone != nil
+        let elapsed = phone?.elapsed ?? r?.elapsed ?? 0
+        let paused = r?.isPaused ?? false
         sidebar.newButton.title = live ? "Stop Recording" : "New Recording"
-        setup.setRecording(live, elapsed: r?.elapsed ?? 0, paused: r?.isPaused ?? false)
+        setup.setRecording(live, elapsed: elapsed, paused: paused)
+        if phone != nil { setup.setPhoneRecording(snippetOpen: snippetOpen) }
         MainActor.assumeIsolated {
-            menuBar?.setRecording(live, elapsed: r?.elapsed ?? 0, paused: r?.isPaused ?? false)
+            menuBar?.setRecording(live, elapsed: elapsed, paused: paused)
         }
-        if live, let r {
-            statusLabel.stringValue = String(format: "%@ %.1fs", r.isPaused ? "paused" : "recording",
-                                             r.elapsed)
+        if live {
+            statusLabel.stringValue = String(format: "%@ %.1fs", paused ? "paused" : "recording", elapsed)
         }
     }
 
@@ -1062,6 +1195,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     try await Still.render(recordingDir: recordingDir, at: t,
                                            to: URL(fileURLWithPath: base + "/still\(i + 1).png"))
                 } catch { Log.line("ERROR: \(error)") }
+            }
+        }
+    }
+
+    private var selectedSnippet: Int?
+    /// The preview keeps the canvas's shape, which is tall for a phone take.
+    private var previewAspect: NSLayoutConstraint?
+
+    private func setPreviewShape(_ size: CGSize) {
+        guard let v = preview?.view, let old = previewAspect, size.width > 0 else { return }
+        let ratio = size.height / size.width
+        guard abs(old.multiplier - ratio) > 0.001 else { return }
+        old.isActive = false
+        let new = v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: ratio)
+        new.isActive = true
+        previewAspect = new
+    }
+
+    private func selectSnippet(_ index: Int) {
+        guard selectedSnippet != index else { return }
+        selectedSnippet = index
+        reload()
+    }
+
+    /// Every snippet of this take, into a snippets folder beside it.
+    private func exportSnippets() {
+        guard !exporting, let p = Project.load(from: recordingDir), !p.snippets.isEmpty else { return }
+        exporting = true
+        inspector.setExportingSnippets(true)
+        let dir = recordingDir
+        let out = dir.appendingPathComponent("snippets")
+        Task {
+            var last: URL?
+            for (i, s) in p.snippets.enumerated() {
+                await MainActor.run {
+                    self.statusLabel.stringValue = "exporting snippet \(i + 1) of \(p.snippets.count)…"
+                }
+                do {
+                    last = try await SnippetExport.run(recordingDir: dir, snippet: s, outDir: out).video
+                } catch {
+                    Log.line("ERROR: \(error.localizedDescription)")
+                }
+            }
+            let done = last
+            await MainActor.run {
+                self.exporting = false
+                self.inspector.setExportingSnippets(false)
+                self.statusLabel.stringValue = done == nil ? "snippet export failed"
+                    : "exported \(p.snippets.count) snippet(s)"
+                if let done { NSWorkspace.shared.activateFileViewerSelecting([done]) }
             }
         }
     }
@@ -1156,6 +1339,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 (5.0, { [weak self] in self?.togglePause() }),
                 (8.0, { [weak self] in
                     if let r = self?.recorder { self?.stopRecording(r) } }),
+            ]
+            for (delay, action) in script {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
+            }
+        }
+        else if consume("autophone") {
+            // a phone take in whatever phone the setup screen has picked,
+            // with one snippet marked in the middle
+            showSetup()
+            let script: [(Double, () -> Void)] = [
+                (0.5, { [weak self] in self?.toggleRecord() }),
+                (4.0, { [weak self] in self?.markSnippet() }),
+                (7.0, { [weak self] in self?.markSnippet() }),
+                (9.0, { [weak self] in self?.toggleRecord() }),
             ]
             for (delay, action) in script {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
@@ -1691,7 +1888,7 @@ public func cutaway_main() {
             let budget: Double = args.first == "record"
                 ? (args.firstIndex(of: "--seconds").flatMap { i in
                         i + 1 < args.count ? Double(args[i + 1]) : nil } ?? 10) + 60
-                : 60
+                : args.first == "snippet" ? 600 : 60
             exit(CLI.relaunchThroughBundle(args, timeout: budget))
         }
         let code = runBlocking { await CLI.run(args) }

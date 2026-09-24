@@ -457,10 +457,12 @@ public final class RenderEngine {
             float3 body = mix(float3(0.27, 0.29, 0.33), float3(0.043, 0.047, 0.059), rim);
             c = mix(c, body, smoothstep(-0.75, 0.75, sdIn));
 
-            float2 cam = float2(centre.x, P.dst.y + bezel * 2.3);
-            float camR = bezel * 0.62;
-            float dCam = length(p - cam);
-            c = mix(c, float3(0.02, 0.02, 0.025), 1.0 - smoothstep(camR - 1.0, camR + 0.5, dCam));
+            if (P.frameKind < 3.5) {
+                float2 cam = float2(centre.x, P.dst.y + bezel * 2.3);
+                float camR = bezel * 0.62;
+                float dCam = length(p - cam);
+                c = mix(c, float3(0.02, 0.02, 0.025), 1.0 - smoothstep(camR - 1.0, camR + 0.5, dCam));
+            }
         }
 
         if (P.frameBar > 0.5 && !phone) {
