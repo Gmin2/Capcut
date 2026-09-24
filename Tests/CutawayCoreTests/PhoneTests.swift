@@ -175,7 +175,7 @@ final class SnippetTests: XCTestCase {
         var project = Project.makePhone(
             manifest: Manifest(screen: .init(file: "display.mp4", pixelSize: [1080, 2424],
                                              offset: 0, duration: 5, frames: 300)),
-            kind: .android)
+            kind: .android, dir: URL(fileURLWithPath: "/nonexistent"))
         project.scenes = [Scene(at: 0, layout: "phone", transition: 0)]
         var events = Events()
         events.clicks = [(t: 1, p: CGPoint(x: 0, y: 0))]
@@ -190,5 +190,44 @@ final class SnippetTests: XCTestCase {
         XCTAssertEqual(touch.ripplePos.y, sp.dst.y + sp.frameBar, accuracy: 0.5)
         XCTAssertEqual(touch.opacity, 0, "no pointer on a phone")
         XCTAssertNil(state.evaluate(atSourceTime: 2).cursor, "gone once it fades")
+    }
+
+    func testPhoneZoomsMergeCloseTapsAndLookAtThem() {
+        let clicks: [(t: Double, p: CGPoint)] = [(1, CGPoint(x: 540, y: 700)),
+                                                 (2.5, CGPoint(x: 300, y: 2000)),
+                                                 (8, CGPoint(x: 540, y: 1200))]
+        let z = AutoZoom.phone(clicks: clicks, sourceSize: screen, duration: 10)
+        XCTAssertEqual(z.count, 2, "taps 1.5s apart share a zoom")
+        XCTAssertEqual(z[0].start, 0.55, accuracy: 1e-9)
+        XCTAssertEqual(z[0].end, 3.8, accuracy: 1e-9)
+        XCTAssertNil(z[0].follow)
+        XCTAssertEqual(z[1].anchor[1], 1200 / 2424, accuracy: 1e-9)
+    }
+
+    func testPhoneCameraPansBetweenTapsAndKeepsThePhoneFilling() throws {
+        var project = Project.makePhone(
+            manifest: Manifest(screen: .init(file: "display.mp4", pixelSize: [1080, 2424],
+                                             offset: 0, duration: 10, frames: 600)),
+            kind: .android, dir: URL(fileURLWithPath: "/nonexistent"))
+        var events = Events()
+        events.clicks = [(t: 1, p: CGPoint(x: 540, y: 300)), (t: 2.5, p: CGPoint(x: 540, y: 2200))]
+        project.zooms = AutoZoom.phone(clicks: events.clicks, sourceSize: screen, duration: 10)
+        let tl = project.timeline(sourceSize: screen, events: events, sourceDuration: 10)
+        let out = project.output.size
+        let state = RenderState(screenSize: screen, webcamSize: nil, outputSize: out, timeline: tl)
+
+        let still = try XCTUnwrap(state.evaluate(atSourceTime: 0.2).screen)
+        let early = try XCTUnwrap(state.evaluate(atSourceTime: 1.6).screen)
+        let late = try XCTUnwrap(state.evaluate(atSourceTime: 3.2).screen)
+        XCTAssertGreaterThan(early.dst.w, still.dst.w * 1.5, "pushed in on the whole phone")
+        XCTAssertEqual(early.src.z, still.src.z, "the picture inside is never cropped")
+        // looking at the top tap, then panned to the bottom one
+        XCTAssertGreaterThan(early.dst.y + early.dst.w, Float(out.height))
+        XCTAssertLessThan(late.dst.y, early.dst.y)
+        // the phone still covers the frame top to bottom
+        for f in [early, late] {
+            XCTAssertLessThanOrEqual(f.dst.y, 0.5)
+            XCTAssertGreaterThanOrEqual(f.dst.y + f.dst.w, Float(out.height) - 0.5)
+        }
     }
 }

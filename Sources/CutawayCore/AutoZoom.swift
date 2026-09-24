@@ -76,4 +76,30 @@ public enum AutoZoom {
         }
         return zooms
     }
+
+    /// Zooms for a phone take: the camera pushes in on the whole phone
+    /// rather than cropping inside it, so one level suits every tap, and
+    /// taps close together in time share one zoom that pans between them.
+    public static func phone(clicks: [(t: Double, p: CGPoint)], sourceSize: CGSize,
+                             duration: Double, level: Double = 1.6) -> [Zoom] {
+        let sorted = clicks.sorted { $0.t < $1.t }
+        var zooms: [Zoom] = []
+        for c in sorted {
+            let start = max(0, c.t - 0.45)
+            let end = min(duration, c.t + 1.3)
+            guard end - start > 0.6 else { continue }
+            if var prev = zooms.last, start - prev.end < 1.2 {
+                prev.end = end
+                zooms[zooms.count - 1] = prev
+                continue
+            }
+            var z = Zoom(start: start, end: end, level: level)
+            z.anchor = [c.p.x / sourceSize.width, c.p.y / sourceSize.height]
+            z.follow = nil
+            z.inDuration = 0.5
+            z.outDuration = 0.6
+            zooms.append(z)
+        }
+        return zooms
+    }
 }

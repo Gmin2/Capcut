@@ -636,7 +636,7 @@ public final class PhoneRecorder: @unchecked Sendable {
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(events).write(to: dir.appendingPathComponent("events.json"))
 
-        var project = Project.makePhone(manifest: manifest, kind: kind)
+        var project = Project.makePhone(manifest: manifest, kind: kind, dir: dir)
         project.snippets = PhoneRecorder.snippets(from: take.marks, duration: duration)
         try project.write(to: dir)
 
