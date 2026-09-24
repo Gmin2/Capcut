@@ -34,6 +34,8 @@ public enum CLI {
             case "recut":    return try recut(args)
             case "shots":    return shots(args)
             case "import":   return try await importVideo(args)
+            case "phone":    return try await phone(args)
+            case "snippet":  return try await snippet(args)
             case "windows":  return try await windows()
             case "displays": return try await displays()
             case "list":     return list()
@@ -76,6 +78,9 @@ public enum CLI {
         ["record", "snap", "doctor", "windows", "displays", "transcribe",
          "export", "still", "pitch", "trim", "recut", "pack", "shots"]
             .contains(args.first ?? "")
+            // rendering snippets writes through the same grant as export;
+            // editing the list is a plain file write
+            || (args.first == "snippet" && args.dropFirst().first == "export")
     }
 
     /// Runs this same bundle as an app and forwards its output.
@@ -241,6 +246,34 @@ public enum CLI {
               Makes a recording out of a video file that did not come from
               Cutaway, like a phone screen recording, so it can be framed,
               cut and exported like any other take.
+
+          phone record [--device android|iphone] [--serial ID] [--seconds N]
+                       [--name NAME] [--out DIR] [--keep-status-bar]
+              Records the android emulator or the iphone simulator: the screen
+              at its own resolution, every tap, and a clean 9:41 status bar.
+              Press return to start a snippet and return again to end it;
+              q then return, or ctrl-c, stops. The simulator needs
+              Window > Show Device Bezels off for taps to be tracked.
+
+          phone devices
+              Lists running emulators and booted simulators.
+
+          phone status-bar on|off [--device android|iphone] [--serial ID]
+              Sets or clears the clean status bar by hand, for screenshots.
+
+          snippet add --name NAME --from S --to S [--in DIR]
+                      [--look framed|bare] [--canvas feed|story|square]
+                      [--background PRESET] [--loop crossfade|none]
+              Adds a snippet, or changes the one with that name. Times are
+              source seconds. framed puts the phone on a background, bare is
+              the screen alone.
+
+          snippet list [--in DIR]
+          snippet remove --name NAME [--in DIR]
+
+          snippet export [--in DIR] [--name NAME] [--out DIR] [--gif]
+              Renders every snippet, or just one, as NAME.mp4 plus a poster
+              NAME.png (and NAME.gif), into DIR/snippets unless --out says.
 
           snap [--out FILE]
               Screenshots the display through the app's capture grant.
@@ -663,6 +696,183 @@ public enum CLI {
         Log.line(String(format: "imported %.0fx%.0f, %.1fs", size.width, size.height, duration))
         emit(dir.path)
         return 0
+    }
+
+    static func phone(_ args: [String]) async throws -> Int32 {
+        var args = args
+        let sub = args.isEmpty ? "record" : args.removeFirst()
+        let opts = Options(args)
+        let kind = PhoneKind(rawValue: opts.value("--device")?.lowercased() ?? "android") ?? .android
+
+        switch sub {
+        case "devices":
+            let droids = (try? Android.devices()) ?? []
+            let sims = (try? Simulator.booted()) ?? []
+            if droids.isEmpty && sims.isEmpty { emit("no emulator or simulator running") }
+            for d in droids { emit("android  \(d)") }
+            for s in sims { emit("iphone   \(s.udid)  \(s.name)") }
+            return 0
+
+        case "status-bar":
+            let on = args.first != "off"
+            switch kind {
+            case .android: try Android.cleanStatusBar(on, serial: try Android.pick(opts.value("--serial")))
+            case .iphone: try Simulator.cleanStatusBar(on, udid: try Simulator.pick(opts.value("--serial")).udid)
+            }
+            emit("status bar \(on ? "clean" : "restored")")
+            return 0
+
+        case "record":
+            let dir = opts.url("--out") ?? Paths.newRecording(named: opts.value("--name"))
+            let r = PhoneRecorder(kind: kind, dir: dir)
+            r.cleanStatusBar = !opts.flag("--keep-status-bar")
+            try r.start(device: opts.value("--serial"))
+
+            let stop = DispatchSemaphore(value: 0)
+            if let seconds = opts.double("--seconds") {
+                DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { stop.signal() }
+            } else {
+                emit("recording \(r.deviceName). return starts a snippet, return again ends it. "
+                     + "q then return, or ctrl-c, stops.")
+            }
+            signal(SIGINT, SIG_IGN)
+            let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+            sigint.setEventHandler { stop.signal() }
+            sigint.resume()
+            if opts.double("--seconds") == nil {
+                Thread.detachNewThread {
+                    // end of input is not a stop: with no terminal attached
+                    // it comes at once, and the take would be over before it
+                    // began. ctrl-c still works.
+                    while let line = readLine() {
+                        if line.trimmingCharacters(in: .whitespaces).lowercased() == "q" {
+                            stop.signal()
+                            return
+                        }
+                        let opened = r.mark()
+                        emit(String(format: "%@ snippet at %.1fs", opened ? "start" : "end  ", r.elapsed))
+                    }
+                }
+            }
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().async { stop.wait(); c.resume() }
+            }
+            sigint.cancel()
+            signal(SIGINT, SIG_DFL)
+            emit("stopping, joining the video")
+            let out = try await r.stop()
+            if out.standardizedFileURL.path.hasPrefix(Paths.recordingsRoot.standardizedFileURL.path) {
+                Paths.linkLatest(to: out)
+            }
+            emit(out.path)
+            return 0
+
+        default:
+            FileHandle.standardError.write(Data("unknown phone command: \(sub)\n".utf8))
+            return 1
+        }
+    }
+
+    static func snippet(_ args: [String]) async throws -> Int32 {
+        var args = args
+        let sub = args.isEmpty ? "list" : args.removeFirst()
+        let opts = Options(args)
+        let dir = opts.url("--in") ?? defaultDir
+        guard var p = Project.load(from: dir) else {
+            FileHandle.standardError.write(Data("no project.json in \(dir.path)\n".utf8))
+            return 1
+        }
+
+        switch sub {
+        case "list":
+            if p.snippets.isEmpty { emit("no snippets. add one with: cutaway snippet add --name NAME --from S --to S") }
+            for s in p.snippets {
+                emit(String(format: "%@  %6.2f-%6.2fs  %@ %@ %@ %@",
+                            s.name.padding(toLength: 20, withPad: " ", startingAt: 0),
+                            s.start, s.end, s.look.rawValue, s.canvas.rawValue,
+                            s.background ?? "dusk", s.loop.rawValue))
+            }
+            return 0
+
+        case "add":
+            guard let name = opts.value("--name") else {
+                FileHandle.standardError.write(Data("snippet add needs --name\n".utf8))
+                return 1
+            }
+            var s = p.snippets.first { $0.name == name }
+                ?? Snippet(name: name, start: 0, end: 0)
+            if let v = opts.double("--from") { s.start = v }
+            if let v = opts.double("--to") { s.end = v }
+            if let v = opts.value("--look") {
+                guard let look = Snippet.Look(rawValue: v) else {
+                    FileHandle.standardError.write(Data("--look is framed or bare\n".utf8))
+                    return 1
+                }
+                s.look = look
+            }
+            if let v = opts.value("--canvas") {
+                guard let c = Snippet.Canvas(rawValue: v) else {
+                    FileHandle.standardError.write(Data("--canvas is feed, story or square\n".utf8))
+                    return 1
+                }
+                s.canvas = c
+            }
+            if let v = opts.value("--background") {
+                guard Style.presets[v] != nil else {
+                    FileHandle.standardError.write(Data(
+                        "no background \(v). try: \(Style.presets.keys.sorted().joined(separator: ", "))\n".utf8))
+                    return 1
+                }
+                s.background = v
+            }
+            if let v = opts.value("--loop") { s.loop = Snippet.Loop(rawValue: v) ?? .crossfade }
+            guard s.end > s.start else {
+                FileHandle.standardError.write(Data("snippet \(name) needs --from before --to\n".utf8))
+                return 1
+            }
+            if let i = p.snippets.firstIndex(where: { $0.name == name }) {
+                p.snippets[i] = s
+            } else {
+                p.snippets.append(s)
+            }
+            try p.write(to: dir)
+            emit(String(format: "%@  %.2f-%.2fs", s.name, s.start, s.end))
+            return 0
+
+        case "remove":
+            guard let name = opts.value("--name"),
+                  let i = p.snippets.firstIndex(where: { $0.name == name }) else {
+                FileHandle.standardError.write(Data("no snippet with that --name\n".utf8))
+                return 1
+            }
+            p.snippets.remove(at: i)
+            try p.write(to: dir)
+            emit("removed \(name)")
+            return 0
+
+        case "export":
+            let chosen = opts.value("--name").map { n in p.snippets.filter { $0.name == n } } ?? p.snippets
+            guard !chosen.isEmpty else {
+                FileHandle.standardError.write(Data("no snippets to export\n".utf8))
+                return 1
+            }
+            let out = opts.url("--out") ?? dir.appendingPathComponent("snippets")
+            var written: [String] = []
+            for s in chosen {
+                let r = try await SnippetExport.run(recordingDir: dir, snippet: s, outDir: out,
+                                                    gif: opts.flag("--gif"))
+                written.append(r.video.path)
+                if let g = r.gif { written.append(g.path) }
+            }
+            // one emit: a relaunched child is read until its first result
+            // line, so paths written one by one would cut the wait short
+            emit(written.joined(separator: "\n"))
+            return 0
+
+        default:
+            FileHandle.standardError.write(Data("unknown snippet command: \(sub)\n".utf8))
+            return 1
+        }
     }
 
     static func trim(_ args: [String]) throws -> Int32 {

@@ -6,7 +6,8 @@ import ScreenCaptureKit
 /// opens the way it was left, and so the hotkey records the same thing.
 public struct RecordSettings {
     public enum Capture: String, CaseIterable {
-        case display = "Display", window = "Window", area = "Area", camera = "Camera only"
+        case display = "Display", window = "Window", area = "Area", camera = "Camera only",
+             phone = "Phone"
     }
 
     public var capture = Capture.display
@@ -22,6 +23,8 @@ public struct RecordSettings {
     public var desktopAudio = 0.55
     public var countdown = 3
     public var keystrokes = false
+    /// kind:id of the emulator or simulator to record in phone mode.
+    public var phone: String?
 
     public static func load() -> RecordSettings {
         let d = UserDefaults.standard
@@ -38,6 +41,7 @@ public struct RecordSettings {
         s.desktopAudio = d.object(forKey: "rec.desktopAudio") as? Double ?? s.desktopAudio
         s.countdown = d.object(forKey: "rec.countdown") as? Int ?? s.countdown
         s.keystrokes = d.bool(forKey: "rec.keys")
+        s.phone = d.string(forKey: "rec.phone")
         return s
     }
 
@@ -53,6 +57,7 @@ public struct RecordSettings {
         d.set(desktopAudio, forKey: "rec.desktopAudio")
         d.set(countdown, forKey: "rec.countdown")
         d.set(keystrokes, forKey: "rec.keys")
+        d.set(phone, forKey: "rec.phone")
     }
 
     /// The area in display points, for the recorder.
@@ -69,6 +74,7 @@ struct Source {
         case display(CGDirectDisplayID)
         case app(String)
         case camera(String)
+        case phone(String)
     }
 
     let kind: Kind
@@ -128,12 +134,22 @@ struct Source {
         return out
     }
 
+    static func phone(_ device: PhoneDevice) -> Source {
+        Source(kind: .phone(device.key), name: device.name,
+               detail: device.kind == .iphone ? "iPhone simulator" : device.id,
+               size: CGSize(width: 1080, height: 2400), filter: nil, icon: nil)
+    }
+
     static func camera(_ device: AVCaptureDevice) -> Source {
         Source(kind: .camera(device.uniqueID), name: device.localizedName, detail: "fills the whole video",
                size: CGSize(width: 1920, height: 1080), filter: nil, icon: nil)
     }
 
     func image(width: CGFloat) async -> CGImage? {
+        if case .phone(let key) = kind {
+            guard let device = PhoneDevice(key: key) else { return nil }
+            return await Task.detached { device.screenshot() }.value
+        }
         guard let filter, size.width > 0 else { return nil }
         let config = SCStreamConfiguration()
         config.width = Int(width)
@@ -150,16 +166,21 @@ struct Source {
 public final class RecordSetupView: ThemedView {
     public var onStart: ((_ countdown: Bool) -> Void)?
     public var onClose: (() -> Void)?
+    /// Starts or ends a snippet while a phone take is rolling.
+    public var onSnippet: (() -> Void)?
+    public let snippetButton = FillButton("Start snippet")
 
     public let startButton = FillButton("Start Recording")
     private var settings = RecordSettings.load()
     private var sources: [Source] = []
+    private var phones: [Source] = []
 
     private let cards = FlippedStack()
     private let canvas = AreaCanvas()
     private let facecam = Facecam()
     private let recPill = RecPill()
     private let sourceHint = Theme.label("", .meta, color: Theme.textTertiary)
+    private let subtitle = Theme.label("", .meta, color: Theme.textSecondary)
     private let micButton = FillButton("Mic On", icon: .mic)
     private let cameraSwitch = Switch(true)
     private let cameraMenu = Dropdown(["No camera"], selected: "No camera")
@@ -185,8 +206,6 @@ public final class RecordSetupView: ThemedView {
 
     private func build() {
         let title = Theme.label("New Recording", .title)
-        let subtitle = Theme.label("Pick what to record, frame it, then start. ⌘⇧8 starts and stops from anywhere.",
-                                   .meta, color: Theme.textSecondary)
         let close = FillButton("Back to editor", icon: .chevronLeft) { [weak self] in self?.onClose?() }
         close.transparent = true
 
@@ -328,6 +347,7 @@ public final class RecordSetupView: ThemedView {
             self.updateFacecam()
             self.rebuildCards()
             self.refreshPreview()
+            if c == .phone { self.reloadPhones() }
         }
         desktopAudio.onChange = { [weak self] v in
             self?.settings.desktopAudio = v
@@ -336,7 +356,9 @@ public final class RecordSetupView: ThemedView {
 
         let cameraLabel = Theme.label("Camera:", .body, color: Theme.textSecondary)
         let scriptButton = FillButton("Script", icon: .transcript) { Prompter.shared.toggle() }
-        let row1 = NSStackView(views: [startButton, micButton, cameraLabel, cameraSwitch, cameraMenu, settingsButton, scriptButton])
+        snippetButton.isHidden = true
+        snippetButton.onClick = { [weak self] in self?.onSnippet?() }
+        let row1 = NSStackView(views: [startButton, snippetButton, micButton, cameraLabel, cameraSwitch, cameraMenu, settingsButton, scriptButton])
         row1.spacing = 12
         row1.setCustomSpacing(8, after: cameraLabel)
         row1.setCustomSpacing(10, after: cameraSwitch)
@@ -353,7 +375,7 @@ public final class RecordSetupView: ThemedView {
             v.translatesAutoresizingMaskIntoConstraints = false
             bar.addSubview(v)
         }
-        for v in [startButton, micButton, cameraMenu, settingsButton, captureMenu] as [NSView] {
+        for v in [startButton, snippetButton, micButton, cameraMenu, settingsButton, captureMenu] as [NSView] {
             v.heightAnchor.constraint(equalToConstant: 28).isActive = true
         }
         NSLayoutConstraint.activate([
@@ -391,6 +413,7 @@ public final class RecordSetupView: ThemedView {
                 Log.line("could not list sources: \(error.localizedDescription)")
                 self.sources = []
             }
+            self.phones = await Task.detached { PhoneDevice.running() }.value.map(Source.phone)
             self.rebuildCards()
             self.refreshPreview()
         }
@@ -408,6 +431,10 @@ public final class RecordSetupView: ThemedView {
     }
 
     private func updateFacecam() {
+        guard settings.capture != .phone else {
+            facecam.stop()
+            return
+        }
         let full = settings.capture == .camera
         NSLayoutConstraint.deactivate(full ? bubbleConstraints : fullConstraints)
         NSLayoutConstraint.activate(full ? fullConstraints : bubbleConstraints)
@@ -427,6 +454,14 @@ public final class RecordSetupView: ThemedView {
         cameraSwitch.isEnabled = !live && settings.capture != .camera
         recPill.isHidden = !live
         recPill.text = String(format: "%@ %d:%02d", paused ? "PAUSED" : "REC", Int(elapsed) / 60, Int(elapsed) % 60)
+        if !live { snippetButton.isHidden = true }
+    }
+
+    /// A phone take stays on this screen while it rolls: the phone is in its
+    /// own window, and this is where snippets get marked.
+    public func setPhoneRecording(snippetOpen: Bool) {
+        snippetButton.isHidden = false
+        snippetButton.title = snippetOpen ? "End snippet" : "Start snippet"
     }
 
     /// Camera only keeps this screen up while recording. The countdown runs
@@ -449,26 +484,46 @@ public final class RecordSetupView: ThemedView {
         micButton.title = settings.mic ? "Mic On" : "Mic Off"
         micButton.icon = settings.mic ? .mic : .micOff
         let cameraOnly = settings.capture == .camera
-        cameraSwitch.isOn = settings.camera || cameraOnly
-        cameraSwitch.isEnabled = !cameraOnly
+        let phone = settings.capture == .phone
+        cameraSwitch.isOn = (settings.camera || cameraOnly) && !phone
+        cameraSwitch.isEnabled = !cameraOnly && !phone
+        // a phone take is the phone's screen and its taps, nothing from the mac
+        micButton.isEnabled = !phone
         let names = cameras.map(\.localizedName)
         cameraMenu.options = names.isEmpty ? ["No camera"] : names
         cameraMenu.selected = cameras.first { $0.uniqueID == settings.cameraID }?.localizedName
             ?? names.first ?? "No camera"
-        cameraMenu.isEnabled = (settings.camera || cameraOnly) && !names.isEmpty
+        cameraMenu.isEnabled = (settings.camera || cameraOnly) && !names.isEmpty && !phone
         captureMenu.selected = settings.capture.rawValue
         desktopAudio.value = settings.desktopAudio
-        desktopAudio.isHidden = cameraOnly
+        desktopAudio.isHidden = cameraOnly || phone
+        subtitle.stringValue = phone
+            ? "Use the phone in its own window. ⌘⇧8 starts and stops, ⌘⇧0 starts and ends a snippet."
+            : "Pick what to record, frame it, then start. ⌘⇧8 starts and stops from anywhere."
         canvas.showsArea = settings.capture == .area
-        canvas.placeholder = cameraOnly ? (cameras.isEmpty ? "No camera found" : "") : "Pick a source to see it here"
+        canvas.placeholder = phone ? "Start the Android emulator or an iPhone simulator, then pick it above"
+            : cameraOnly ? (cameras.isEmpty ? "No camera found" : "") : "Pick a source to see it here"
         if cameraOnly { canvas.image = nil }
         canvas.area = settings.area
     }
 
     // MARK: sources
 
+    /// Emulators come and go while this screen is up, so picking phone mode
+    /// looks again.
+    private func reloadPhones() {
+        Task { @MainActor in
+            self.phones = await Task.detached { PhoneDevice.running() }.value.map(Source.phone)
+            if self.settings.capture == .phone {
+                self.rebuildCards()
+                self.refreshPreview()
+            }
+        }
+    }
+
     private var visibleSources: [Source] {
         if settings.capture == .camera { return cameras.map(Source.camera) }
+        if settings.capture == .phone { return phones }
         return sources.filter {
             if case .app = $0.kind { return settings.capture == .window }
             return settings.capture != .window
@@ -482,6 +537,7 @@ public final class RecordSetupView: ThemedView {
             case .display(let id): return id == settings.displayID
             case .app(let id): return id == settings.app
             case .camera(let id): return id == settings.cameraID
+            case .phone(let key): return key == settings.phone
             }
         } ?? list.first
     }
@@ -497,7 +553,7 @@ public final class RecordSetupView: ThemedView {
             cards.addArrangedSubview(card)
             Task { @MainActor in card.thumbnail = await source.image(width: 360) }
         }
-        let noun = ["Window": "app", "Camera only": "camera"][settings.capture.rawValue] ?? "display"
+        let noun = ["Window": "app", "Camera only": "camera", "Phone": "phone"][settings.capture.rawValue] ?? "display"
         sourceHint.stringValue = list.isEmpty
             ? "no \(noun)s found"
             : "\(list.count) \(noun)\(list.count == 1 ? "" : "s")"
@@ -512,6 +568,7 @@ public final class RecordSetupView: ThemedView {
             settings.cameraID = id
             syncControls()
             updateFacecam()
+        case .phone(let key): settings.phone = key
         }
         settings.save()
         for case let card as SourceCard in cards.arrangedSubviews {

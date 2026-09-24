@@ -56,6 +56,7 @@ public struct Style: Codable {
         "forest":    .init(from: "#0F3D3E", to: "#08131A", angle: 120),
         "paper":     .init(from: "#EDE7DC", to: "#CFC6B6", angle: 115,
                            grain: 0.02, dim: 0),
+        "dusk":      .init(from: "#8A78E0", to: "#4B3B9E", angle: 150),
         "ink":       .init(from: "#0B0D10", to: "#0B0D10", angle: 0, kind: "solid"),
         "screen":    .init(from: "#000000", to: "#000000", angle: 0,
                            kind: "blurredScreen"),

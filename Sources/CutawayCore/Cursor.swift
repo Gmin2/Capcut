@@ -17,8 +17,26 @@ public struct CursorStyle: Codable {
     public var rippleDuration: Double = 0.45
     public var rippleRadius: Double = 46
     public var rippleColor = "#FFFFFFA6"
+    /// A phone take: no pointer, and each tap drawn as a fingertip that
+    /// lands and fades, wherever it was, since a finger has no hover.
+    public var touches = false
 
     public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func get<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? c.decode(T.self, forKey: key)) ?? fallback
+        }
+        visible = get(.visible, true)
+        scale = get(.scale, 1.7)
+        smoothing = get(.smoothing, 0.45)
+        clickRipple = get(.clickRipple, true)
+        rippleDuration = get(.rippleDuration, 0.45)
+        rippleRadius = get(.rippleRadius, 46)
+        rippleColor = get(.rippleColor, "#FFFFFFA6")
+        touches = get(.touches, false)
+    }
 }
 
 public struct CursorParams {

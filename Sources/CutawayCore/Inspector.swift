@@ -22,6 +22,16 @@ public final class InspectorView: ThemedView {
     public var apply: ((@escaping (inout Project) -> Void) -> Void)?
     public var onSeek: ((Double) -> Void)?
     public var onExport: (() -> Void)?
+    public var onExportSnippets: (() -> Void)?
+    public var onSelectSnippet: ((Int) -> Void)?
+    /// Which snippet the look controls act on.
+    public var selectedSnippet: Int?
+    private let snippetExportButton = FillButton("Export snippets", icon: .download)
+
+    public func setExportingSnippets(_ busy: Bool) {
+        snippetExportButton.isEnabled = !busy
+        snippetExportButton.title = busy ? "Exporting…" : "Export snippets"
+    }
 
     private let content = FlippedStack()
     private var rows: [MomentRow] = []
@@ -115,12 +125,14 @@ public final class InspectorView: ThemedView {
             add(row, gap: 6, height: 32)
         }
 
+        if p.deviceFrame.isPhone || !p.snippets.isEmpty { snippetSection(p) }
+
         section("Look")
-        add(pickerRow("Background", ["midnight", "slate", "ember", "forest", "paper", "ink", "screen"],
+        add(pickerRow("Background", ["midnight", "slate", "ember", "forest", "paper", "ink", "dusk", "screen"],
                       p.backgroundPreset ?? "midnight") { name in
             { $0.backgroundPreset = name; $0.style.background = Style.presets[name] ?? $0.style.background }
         }, gap: 2)
-        add(pickerRow("Frame", ["none", "macWindow", "browser", "phone"], p.deviceFrame.rawValue) { name in
+        add(pickerRow("Frame", ["none", "macWindow", "browser", "phone", "iphone"], p.deviceFrame.rawValue) { name in
             { $0.deviceFrame = DeviceFrame(rawValue: name) ?? .none }
         }, gap: 2)
         // speed of the finished video, not of the preview: this one exports
@@ -144,6 +156,50 @@ public final class InspectorView: ThemedView {
         slider("Voice", p.audio.mic) { $0.audio.mic = $1 }
         slider("System", p.audio.system) { $0.audio.system = $1 }
         toggle("Duck under voice", p.audio.duckSystemUnderVoice) { $0.audio.duckSystemUnderVoice = $1 }
+    }
+
+    /// The loops to post: one row each, the look of the chosen one, and a
+    /// button that renders them all.
+    private func snippetSection(_ p: Project) {
+        section("Snippets")
+        if p.snippets.isEmpty {
+            let hint = Theme.label("Double-click the Snippets lane to add one. While a phone take "
+                                   + "is recording, ⌘⇧0 starts and ends one.",
+                                   .body, color: Theme.textTertiary)
+            hint.maximumNumberOfLines = 3
+            hint.lineBreakMode = .byWordWrapping
+            add(hint, gap: 8)
+            return
+        }
+        for (i, s) in p.snippets.enumerated() {
+            let row = MomentRow(number: i + 1, time: s.start,
+                                title: String(format: "%@  %.1fs", s.name, s.duration))
+            row.selected = i == selectedSnippet
+            row.onClick = { [weak self] in
+                self?.onSelectSnippet?(i)
+                self?.onSeek?(s.start)
+            }
+            add(row, gap: 6, height: 32)
+        }
+        if let i = selectedSnippet, p.snippets.indices.contains(i) {
+            let s = p.snippets[i]
+            func set(_ body: @escaping (inout Snippet, String) -> Void) -> (String) -> (inout Project) -> Void {
+                { value in { p in
+                    guard p.snippets.indices.contains(i) else { return }
+                    body(&p.snippets[i], value)
+                } }
+            }
+            add(pickerRow("Look", Snippet.Look.allCases.map(\.rawValue), s.look.rawValue,
+                          set { $0.look = Snippet.Look(rawValue: $1) ?? .framed }), gap: 2)
+            add(pickerRow("Canvas", Snippet.Canvas.allCases.map(\.rawValue), s.canvas.rawValue,
+                          set { $0.canvas = Snippet.Canvas(rawValue: $1) ?? .feed }), gap: 2)
+            add(pickerRow("Background", ["dusk", "paper", "midnight", "slate", "ember", "forest", "ink"],
+                          s.background ?? "dusk", set { $0.background = $1 }), gap: 2)
+            add(pickerRow("Loop", Snippet.Loop.allCases.map(\.rawValue), s.loop.rawValue,
+                          set { $0.loop = Snippet.Loop(rawValue: $1) ?? .crossfade }), gap: 8)
+        }
+        snippetExportButton.onClick = { [weak self] in self?.onExportSnippets?() }
+        add(snippetExportButton, gap: 4, height: 30)
     }
 
     /// Highlights the moment the playhead is inside.

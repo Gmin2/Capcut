@@ -1,7 +1,7 @@
 import AppKit
 import AVFoundation
 
-/// Ruler, waveform, then scene and zoom lanes, with the playhead over all of
+/// Ruler, waveform, then scene, zoom, speed and snippet lanes, with the playhead over all of
 /// them. Drawn rather than built from subviews because the blocks change on
 /// every edit.
 public final class TimelineView: ThemedView {
@@ -9,6 +9,14 @@ public final class TimelineView: ThemedView {
     public var duration: Double = 0 { didSet { needsDisplay = true } }
     public var timeline: Timeline? { didSet { needsDisplay = true } }
     public var playhead: Double = 0 { didSet { needsDisplay = true } }
+    /// The loops to post, drawn on their own lane under the cut list.
+    public var snippets: [Snippet] = [] { didSet { needsDisplay = true } }
+    public var selectedSnippet: Int? { didSet { needsDisplay = true } }
+    public var onAddSnippet: ((Double) -> Void)?
+    /// Same edges as a zoom: -1 left, 1 right, 0 the whole block.
+    public var onMoveSnippet: ((_ index: Int, _ edge: Int, _ t: Double) -> Void)?
+    public var onDeleteSnippet: ((Int) -> Void)?
+    public var onSelectSnippet: ((Int) -> Void)?
     public var onSeek: ((Double) -> Void)?
     public var onMoveScene: ((Int, Double) -> Void)?
     public var onAddScene: ((Double) -> Void)?
@@ -29,6 +37,8 @@ public final class TimelineView: ThemedView {
     private var dragging: Int?
     private var draggingTrim: Bool?
     private var draggingZoom: (index: Int, edge: Int)?
+    private var draggingSnippet: (index: Int, edge: Int)?
+    private var snippetGrabOffset: Double = 0
     private var zoomGrabOffset: Double = 0
 
     private var peaks: [Float] = []
@@ -43,7 +53,8 @@ public final class TimelineView: ThemedView {
     private var sceneY: CGFloat { waveTop + waveHeight + 10 }
     private var zoomY: CGFloat { sceneY + laneHeight + 6 }
     private var speedY: CGFloat { zoomY + laneHeight + 6 }
-    public static let preferredHeight: CGFloat = 32 + 62 + 10 + 22 + 6 + 22 + 6 + 22 + 10
+    private var snippetY: CGFloat { speedY + laneHeight + 6 }
+    public static let preferredHeight: CGFloat = 32 + 62 + 10 + 22 + 6 + 22 + 6 + 22 + 6 + 22 + 10
 
     public override var acceptsFirstResponder: Bool { true }
 
@@ -215,8 +226,10 @@ public final class TimelineView: ThemedView {
         text("Scenes", at: NSPoint(x: 0, y: sceneY + 3), .caption, Theme.textTertiary)
         text("Zoom", at: NSPoint(x: 0, y: zoomY + 3), .caption, Theme.textTertiary)
         text("Speed", at: NSPoint(x: 0, y: speedY + 3), .caption, Theme.textTertiary)
+        text("Snippets", at: NSPoint(x: 0, y: snippetY + 3), .caption, Theme.textTertiary)
         guard let tl = timeline else { return }
         drawSpans(tl)
+        drawSnippets()
 
         let scenes = tl.scenes.sorted { $0.at < $1.at }
         for (i, sc) in scenes.enumerated() {
@@ -253,6 +266,36 @@ public final class TimelineView: ThemedView {
             if r.width > 44 {
                 text(String(format: "%.1f×", z.level), at: NSPoint(x: r.minX + 10, y: r.minY + 3),
                      .caption, Theme.textPrimary)
+            }
+        }
+    }
+
+    private func drawSnippets() {
+        for (i, s) in snippets.enumerated() {
+            let r = NSRect(x: trackX(s.start), y: snippetY,
+                           width: max(2, trackX(s.end) - trackX(s.start)), height: laneHeight)
+                .insetBy(dx: 1, dy: 0)
+            let chosen = selectedSnippet == i || draggingSnippet?.index == i
+            let path = NSBezierPath(roundedRect: r, xRadius: Theme.radiusControl,
+                                    yRadius: Theme.radiusControl)
+            (chosen ? Theme.fillSelected : Theme.fill).setFill()
+            path.fill()
+            if chosen {
+                path.lineWidth = Theme.borderSelected
+                Theme.accentBorder.setStroke()
+                path.stroke()
+            }
+            if r.width > 14 {
+                Theme.textTertiary.setFill()
+                NSRect(x: r.minX + 3, y: r.minY + 6, width: 2, height: r.height - 12).fill()
+                NSRect(x: r.maxX - 5, y: r.minY + 6, width: 2, height: r.height - 12).fill()
+            }
+            if r.width > 50 {
+                let label = String(format: "%@  %.1fs", s.name, s.duration) as NSString
+                label.draw(with: NSRect(x: r.minX + 10, y: r.minY + 3, width: r.width - 18, height: 16),
+                           options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+                           attributes: [.font: Theme.Text.caption.font,
+                                        .foregroundColor: chosen ? Theme.textPrimary : Theme.textSecondary])
             }
         }
     }
@@ -307,7 +350,7 @@ public final class TimelineView: ThemedView {
 
     // MARK: interaction
 
-    enum Lane { case ruler, wave, scene, zoom, speed }
+    enum Lane { case ruler, wave, scene, zoom, speed, snippet }
 
     /// Where a moment sits on a lane, in this view's coordinates.
     func point(at t: Double, lane: Lane) -> NSPoint {
@@ -318,6 +361,7 @@ public final class TimelineView: ThemedView {
         case .scene: y = sceneY + laneHeight / 2
         case .zoom: y = zoomY + laneHeight / 2
         case .speed: y = speedY + laneHeight / 2
+        case .snippet: y = snippetY + laneHeight / 2
         }
         return NSPoint(x: trackX(t), y: y)
     }
@@ -328,6 +372,22 @@ public final class TimelineView: ThemedView {
         // Option-click deletes, and it wins over grabbing a handle underneath.
         if event.modifierFlags.contains(.option), let hit = zoomHit(p) {
             onDeleteZoom?(hit.index)
+            return
+        }
+        if isInSnippetLane(p) {
+            if let hit = snippetHit(p) {
+                if event.modifierFlags.contains(.option) {
+                    onDeleteSnippet?(hit.index)
+                    return
+                }
+                onSelectSnippet?(hit.index)
+                onGestureBegan?()
+                draggingSnippet = hit
+                if hit.edge == 0 { snippetGrabOffset = time(at: p) - snippets[hit.index].start }
+                return
+            }
+            if event.clickCount == 2 { onAddSnippet?(time(at: p)); return }
+            onSeek?(time(at: p))
             return
         }
         if let isStart = trimHandle(near: p) {
@@ -371,15 +431,21 @@ public final class TimelineView: ThemedView {
             onMoveZoom?(z.index, z.edge, z.edge == 0 ? time(at: p) - zoomGrabOffset : time(at: p))
             return
         }
+        if let s = draggingSnippet {
+            onMoveSnippet?(s.index, s.edge, s.edge == 0 ? time(at: p) - snippetGrabOffset : time(at: p))
+            return
+        }
         if let i = dragging { onMoveScene?(i, time(at: p)); return }
         onSeek?(time(at: p))
     }
 
     public override func mouseUp(with event: NSEvent) {
         let wasEditing = dragging != nil || draggingTrim != nil || draggingZoom != nil
+            || draggingSnippet != nil
         dragging = nil
         draggingTrim = nil
         draggingZoom = nil
+        draggingSnippet = nil
         if wasEditing { onGestureEnded?() }
     }
 
@@ -412,10 +478,32 @@ public final class TimelineView: ThemedView {
                               cursor: .openHand)
             }
         }
+        for s in snippets {
+            for t in [s.start, s.end] {
+                addCursorRect(NSRect(x: trackX(t) - 6, y: snippetY, width: 12, height: laneHeight),
+                              cursor: .resizeLeftRight)
+            }
+            let a = trackX(s.start), b = trackX(s.end)
+            if b - a > 18 {
+                addCursorRect(NSRect(x: a + 7, y: snippetY, width: b - a - 14, height: laneHeight),
+                              cursor: .openHand)
+            }
+        }
     }
 
     private func isInZoomLane(_ p: NSPoint) -> Bool { p.y >= zoomY && p.y <= zoomY + laneHeight }
     private func isInSpeedLane(_ p: NSPoint) -> Bool { p.y >= speedY && p.y <= speedY + laneHeight }
+    private func isInSnippetLane(_ p: NSPoint) -> Bool { p.y >= snippetY && p.y <= snippetY + laneHeight }
+
+    private func snippetHit(_ p: NSPoint) -> (index: Int, edge: Int)? {
+        for (i, s) in snippets.enumerated() {
+            let a = trackX(s.start), b = trackX(s.end)
+            if abs(a - p.x) < 7 { return (i, -1) }
+            if abs(b - p.x) < 7 { return (i, 1) }
+            if p.x > a && p.x < b { return (i, 0) }
+        }
+        return nil
+    }
 
     private func spanIndex(at p: NSPoint) -> Int? {
         guard let tl = timeline else { return nil }
