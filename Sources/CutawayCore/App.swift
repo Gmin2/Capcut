@@ -53,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         window.contentView = buildLayout()
+        if UserDefaults.standard.bool(forKey: "ui.timelineFolded") { foldTimeline(true) }
         wireUp()
 
         Log.sink = { [weak self] s in
@@ -88,31 +89,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let leftRule = Divider(), rightRule = Divider()
 
         let previewCard = Surface(Theme.inset, radius: Theme.radiusPanel)
-        if let v = preview?.view {
-            v.wantsLayer = true
-            v.layer?.cornerRadius = 8
-            v.layer?.masksToBounds = true
-            v.translatesAutoresizingMaskIntoConstraints = false
-            previewCard.addSubview(v)
-            // as big as the card allows in either direction, but never pushing
-            // the card or the window: a tall phone canvas would otherwise win
-            // against the window's own size and squeeze everything else
-            let fillWidth = v.widthAnchor.constraint(equalTo: previewCard.widthAnchor, constant: -24)
-            fillWidth.priority = NSLayoutConstraint.Priority(240)
-            let fillHeight = v.heightAnchor.constraint(equalTo: previewCard.heightAnchor, constant: -24)
-            fillHeight.priority = NSLayoutConstraint.Priority(240)
-            let aspect = v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: 9.0 / 16.0)
-            previewAspect = aspect
-            NSLayoutConstraint.activate([
-                v.centerXAnchor.constraint(equalTo: previewCard.centerXAnchor),
-                v.centerYAnchor.constraint(equalTo: previewCard.centerYAnchor),
-                v.widthAnchor.constraint(lessThanOrEqualTo: previewCard.widthAnchor, constant: -24),
-                v.heightAnchor.constraint(lessThanOrEqualTo: previewCard.heightAnchor, constant: -24),
-                aspect,
-                fillWidth,
-                fillHeight,
-            ])
-        }
+        self.previewCard = previewCard
+        attachPreview(to: previewCard, inset: 12)
+        let fullScreen = IconButton(.expand, transparent: true) { [weak self] in self?.toggleTheater() }
+        fullScreen.toolTip = "Full screen (F)"
+        fullScreen.translatesAutoresizingMaskIntoConstraints = false
+        previewCard.addSubview(fullScreen)
+        NSLayoutConstraint.activate([
+            fullScreen.topAnchor.constraint(equalTo: previewCard.topAnchor, constant: 8),
+            fullScreen.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor, constant: -8),
+            fullScreen.widthAnchor.constraint(equalToConstant: 28),
+            fullScreen.heightAnchor.constraint(equalToConstant: 28),
+        ])
 
         let back = TransportButton(.back) { [weak self] in self?.skip(-5) }
         let forward = TransportButton(.forward) { [weak self] in self?.skip(5) }
@@ -137,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transport.setCustomSpacing(18, after: forward)
 
         let timelineCard = Surface(Theme.inset, radius: Theme.radiusPanel)
+        self.timelineCard = timelineCard
         let timelineHeader = SectionHeader("Timeline", icon: .layers)
         timelineHint.isHidden = true
         for v in [timelineHeader, timelineHint, timelineView] as [NSView] {
@@ -153,7 +142,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // takes the room from the transcript, up for a smaller one
         let resize = ResizeHandle()
         resize.onDrag = { [weak self] dy in self?.resizePreview(by: dy) }
-        resize.onBegin = { [weak self] in self?.dragStartHeight = self?.transcriptHeight?.constant ?? 0 }
+        resize.onBegin = { [weak self] in
+            guard let self else { return }
+            self.dragStartHeight = self.timelineFolded ? -Self.foldTimelineAt - 1
+                : self.transcriptHeight?.constant ?? 0
+        }
         resize.onReset = { [weak self] in self?.setTranscriptHeight(Self.defaultTranscriptHeight) }
 
         emptyNote.maximumNumberOfLines = 3
@@ -250,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             timelineView.leadingAnchor.constraint(equalTo: timelineCard.leadingAnchor, constant: 12),
             timelineView.trailingAnchor.constraint(equalTo: timelineCard.trailingAnchor, constant: -4),
             timelineView.heightAnchor.constraint(equalToConstant: TimelineView.preferredHeight),
-            timelineView.bottomAnchor.constraint(equalTo: timelineCard.bottomAnchor, constant: -8),
+            timelineBottom(timelineCard),
 
             transcriptCard.topAnchor.constraint(equalTo: timelineCard.bottomAnchor, constant: 12),
             transcriptCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
@@ -852,6 +845,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "\u{f703}":                                   // right arrow
             step(event.modifierFlags.contains(.shift) ? 5 : 1)
             return true
+        case "f":
+            toggleTheater()
+            return true
         default: return false
         }
     }
@@ -1213,6 +1209,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var selectedSnippet: Int?
+    private weak var previewCard: NSView?
+    private var theater: TheaterWindow?
+
+    /// Puts the preview in a box, as large as fits at the canvas's shape.
+    private func attachPreview(to box: NSView, inset: CGFloat) {
+        guard let v = preview?.view else { return }
+        let ratio = previewAspect?.multiplier ?? 9.0 / 16.0
+        previewAspect?.isActive = false
+        v.removeFromSuperview()
+        v.wantsLayer = true
+        v.layer?.cornerRadius = inset > 0 ? 8 : 0
+        v.layer?.masksToBounds = true
+        v.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(v, positioned: .below, relativeTo: nil)
+        // as big as the box allows in either direction, but never pushing
+        // the box or the window: a tall phone canvas would otherwise win
+        // against the window's own size and squeeze everything else
+        let fillWidth = v.widthAnchor.constraint(equalTo: box.widthAnchor, constant: -inset * 2)
+        fillWidth.priority = NSLayoutConstraint.Priority(240)
+        let fillHeight = v.heightAnchor.constraint(equalTo: box.heightAnchor, constant: -inset * 2)
+        fillHeight.priority = NSLayoutConstraint.Priority(240)
+        let aspect = v.heightAnchor.constraint(equalTo: v.widthAnchor, multiplier: ratio)
+        previewAspect = aspect
+        NSLayoutConstraint.activate([
+            v.centerXAnchor.constraint(equalTo: box.centerXAnchor),
+            v.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+            v.widthAnchor.constraint(lessThanOrEqualTo: box.widthAnchor, constant: -inset * 2),
+            v.heightAnchor.constraint(lessThanOrEqualTo: box.heightAnchor, constant: -inset * 2),
+            aspect,
+            fillWidth,
+            fillHeight,
+        ])
+    }
+
+    /// The preview alone on black, filling the screen. Esc or the button
+    /// brings it back; space and the arrows still play and step.
+    @objc private func toggleTheater() {
+        if let t = theater {
+            theater = nil
+            if let card = previewCard { attachPreview(to: card, inset: 12) }
+            t.orderOut(nil)
+            NSApp.presentationOptions = []
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let t = TheaterWindow(contentRect: screen.frame, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        t.backgroundColor = .black
+        t.isReleasedWhenClosed = false
+        // the exit button draws in the dark palette, or it vanishes on black
+        t.appearance = NSAppearance(named: .darkAqua)
+        let content = NSView()
+        content.wantsLayer = true
+        content.layer?.backgroundColor = NSColor.black.cgColor
+        t.contentView = content
+        attachPreview(to: content, inset: 0)
+        let exit = IconButton(.expand, transparent: true) { [weak self] in self?.toggleTheater() }
+        exit.toolTip = "Exit full screen (Esc)"
+        exit.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(exit)
+        NSLayoutConstraint.activate([
+            exit.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            exit.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            exit.widthAnchor.constraint(equalToConstant: 32),
+            exit.heightAnchor.constraint(equalToConstant: 32),
+        ])
+        t.onKey = { [weak self] event in
+            guard let self else { return false }
+            if event.keyCode == 53 || event.charactersIgnoringModifiers == "f" {
+                self.toggleTheater()
+                return true
+            }
+            return self.handleEditorKey(event)
+        }
+        t.setFrame(screen.frame, display: true)
+        NSApp.presentationOptions = [.autoHideMenuBar, .autoHideDock]
+        t.makeKeyAndOrderFront(nil)
+        theater = t
+    }
 
     /// How tall the transcript is, which is what sets how tall the preview is:
     /// the preview gets whatever the column has left.
@@ -1220,6 +1296,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var transcriptCard: NSView?
     private var dragStartHeight: CGFloat = 0
     private static let defaultTranscriptHeight: CGFloat = 118
+
+    /// Dragged this far past a folded transcript, the timeline folds too and
+    /// the preview has the whole column.
+    private static let foldTimelineAt: CGFloat = 60
+    private weak var timelineCard: NSView?
+    private var timelineBottomConstraint: NSLayoutConstraint?
+    private var timelineFoldConstraint: NSLayoutConstraint?
+    private var timelineFolded = false
+
+    private func timelineBottom(_ card: NSView) -> NSLayoutConstraint {
+        let bottom = timelineView.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8)
+        timelineBottomConstraint = bottom
+        timelineFoldConstraint = card.heightAnchor.constraint(equalToConstant: 0)
+        return bottom
+    }
+
+    private func foldTimeline(_ fold: Bool) {
+        guard fold != timelineFolded else { return }
+        timelineFolded = fold
+        timelineBottomConstraint?.isActive = !fold
+        timelineFoldConstraint?.isActive = fold
+        timelineCard?.isHidden = fold
+        UserDefaults.standard.set(fold, forKey: "ui.timelineFolded")
+    }
 
     private func transcriptHeightConstraint(_ card: NSView) -> NSLayoutConstraint {
         let saved = UserDefaults.standard.object(forKey: "ui.transcriptHeight") as? Double
@@ -1239,6 +1339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // leave the preview at least a usable size; below 40 the transcript
         // is too short to read, so it folds away instead
         let most = max(0, window.frame.height - 640)
+        foldTimeline(h < -Self.foldTimelineAt)
         var value = min(max(h, 0), most)
         if value < 40 { value = 0 }
         c.constant = value
@@ -1403,6 +1504,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
             }
         }
+        else if consume("autotheater") { toggleTheater() }
         else if consume("autointeract") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.interactionCheck() }
         }
@@ -1966,6 +2068,15 @@ private func runBlocking(_ body: @escaping () async -> Int32) -> Int32 {
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
     }
     return result
+}
+
+/// A borderless window that can take keys, for the full screen preview.
+final class TheaterWindow: NSWindow {
+    var onKey: ((NSEvent) -> Bool)?
+    override var canBecomeKey: Bool { true }
+    override func keyDown(with event: NSEvent) {
+        if onKey?(event) != true { super.keyDown(with: event) }
+    }
 }
 
 /// A thin strip to drag, with a grabber that shows on hover.
