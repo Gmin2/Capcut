@@ -147,6 +147,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let transcriptCard = Surface(Theme.inset, radius: Theme.radiusPanel)
         transcript.translatesAutoresizingMaskIntoConstraints = false
         transcriptCard.addSubview(transcript)
+        self.transcriptCard = transcriptCard
+
+        // the preview's bottom edge: drag down for a bigger picture, which
+        // takes the room from the transcript, up for a smaller one
+        let resize = ResizeHandle()
+        resize.onDrag = { [weak self] dy in self?.resizePreview(by: dy) }
+        resize.onBegin = { [weak self] in self?.dragStartHeight = self?.transcriptHeight?.constant ?? 0 }
+        resize.onReset = { [weak self] in self?.setTranscriptHeight(Self.defaultTranscriptHeight) }
 
         emptyNote.maximumNumberOfLines = 3
         emptyNote.alignment = .center
@@ -154,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         emptyNote.preferredMaxLayoutWidth = 420
         let views: [NSView] = [left, right, leftRule, rightRule, sidebar, inspector,
                                undoButton, redoButton, transport, statusLabel,
-                               previewCard, timelineCard, transcriptCard, emptyNote, setup]
+                               previewCard, timelineCard, transcriptCard, emptyNote, resize, setup]
         for v in views {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -248,7 +256,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             transcriptCard.leadingAnchor.constraint(equalTo: center.leadingAnchor),
             transcriptCard.trailingAnchor.constraint(equalTo: center.trailingAnchor),
             transcriptCard.bottomAnchor.constraint(equalTo: center.bottomAnchor),
-            transcriptCard.heightAnchor.constraint(equalToConstant: 118),
+            transcriptHeightConstraint(transcriptCard),
+
+            resize.leadingAnchor.constraint(equalTo: center.leadingAnchor),
+            resize.trailingAnchor.constraint(equalTo: center.trailingAnchor),
+            resize.centerYAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: 5),
+            resize.heightAnchor.constraint(equalToConstant: 10),
             transcript.topAnchor.constraint(equalTo: transcriptCard.topAnchor),
             transcript.leadingAnchor.constraint(equalTo: transcriptCard.leadingAnchor),
             transcript.trailingAnchor.constraint(equalTo: transcriptCard.trailingAnchor),
@@ -1200,6 +1213,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var selectedSnippet: Int?
+
+    /// How tall the transcript is, which is what sets how tall the preview is:
+    /// the preview gets whatever the column has left.
+    private var transcriptHeight: NSLayoutConstraint?
+    private weak var transcriptCard: NSView?
+    private var dragStartHeight: CGFloat = 0
+    private static let defaultTranscriptHeight: CGFloat = 118
+
+    private func transcriptHeightConstraint(_ card: NSView) -> NSLayoutConstraint {
+        let saved = UserDefaults.standard.object(forKey: "ui.transcriptHeight") as? Double
+        let c = card.heightAnchor.constraint(equalToConstant: CGFloat(saved ?? Double(Self.defaultTranscriptHeight)))
+        transcriptHeight = c
+        card.isHidden = c.constant < 1
+        return c
+    }
+
+    /// dy is how far the pointer moved up since the drag began.
+    private func resizePreview(by dy: CGFloat) {
+        setTranscriptHeight(dragStartHeight + dy)
+    }
+
+    private func setTranscriptHeight(_ h: CGFloat) {
+        guard let c = transcriptHeight else { return }
+        // leave the preview at least a usable size; below 40 the transcript
+        // is too short to read, so it folds away instead
+        let most = max(0, window.frame.height - 640)
+        var value = min(max(h, 0), most)
+        if value < 40 { value = 0 }
+        c.constant = value
+        transcriptCard?.isHidden = value < 1
+        UserDefaults.standard.set(Double(value), forKey: "ui.transcriptHeight")
+    }
     /// The preview keeps the canvas's shape, which is tall for a phone take.
     private var previewAspect: NSLayoutConstraint?
 
@@ -1921,4 +1966,46 @@ private func runBlocking(_ body: @escaping () async -> Int32) -> Int32 {
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
     }
     return result
+}
+
+/// A thin strip to drag, with a grabber that shows on hover.
+final class ResizeHandle: NSView {
+    var onBegin: (() -> Void)?
+    /// Points moved up since the drag began.
+    var onDrag: ((CGFloat) -> Void)?
+    var onReset: (() -> Void)?
+    private var startY: CGFloat = 0
+    private var hovering = false { didSet { needsDisplay = true } }
+    private var area: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        let a = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow],
+                               owner: self, userInfo: nil)
+        addTrackingArea(a)
+        area = a
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeUpDown) }
+
+    override func draw(_ dirty: NSRect) {
+        guard hovering else { return }
+        Theme.textTertiary.setFill()
+        NSBezierPath(roundedRect: NSRect(x: bounds.midX - 18, y: bounds.midY - 2, width: 36, height: 4),
+                     xRadius: 2, yRadius: 2).fill()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 { onReset?(); return }
+        startY = event.locationInWindow.y
+        onBegin?()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        onDrag?(event.locationInWindow.y - startY)
+    }
 }
